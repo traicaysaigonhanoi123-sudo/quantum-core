@@ -2215,12 +2215,17 @@ html.desktop-viewport-mode .modal-card {
     padding: 4px 6px;
   }
   html:not(.desktop-viewport-mode) .sphere-stage canvas {
+    position: relative;
+    inset: auto;
+    display: block;
+    order: 0;
     width: 100%;
     height: 270px;
     flex: none;
   }
   html:not(.desktop-viewport-mode) .venue-cards-stack {
     position: static;
+    order: 1;
     width: 100%;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
