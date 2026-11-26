@@ -1644,7 +1644,7 @@
     });
 
     const switchMobileTab = (tabKey) => {
-      const validTabs = ['chart', 'sphere', 'bot', 'blotter', 'book'];
+      const validTabs = ['chart', 'bot', 'blotter', 'book'];
       const targetTab = validTabs.includes(tabKey) ? tabKey : 'chart';
       document.documentElement.dataset.mobileTab = targetTab;
       document.querySelectorAll('#mobileBottomNav .mnav-btn').forEach((btn) => {

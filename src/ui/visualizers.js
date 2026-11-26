@@ -547,10 +547,10 @@
 
       const rightPanelW = isMobileStacked ? 0 : (w < 620 ? 190 : 254);
       const availW = isMobileStacked ? w : Math.max(180, w - rightPanelW);
-      const cx = isMobileStacked ? w * 0.58 : availW * 0.50;
-      const cy = isMobileStacked ? h * 0.46 : h * 0.51;
+      const cx = isMobileStacked ? w * 0.65 : availW * 0.50;
+      const cy = isMobileStacked ? h * 0.47 : h * 0.51;
       const radius = isMobileStacked
-        ? Math.min(w * 0.33, h * 0.39)
+        ? Math.min(w * 0.29, h * 0.39)
         : Math.min(availW * 0.39, h * 0.43);
 
       const coreGlow = ctx.createRadialGradient(cx, cy, 4, cx, cy, radius * 1.2);
@@ -696,7 +696,14 @@
         return;
       }
 
-      const scale = Math.max(0.76, Math.min(1.06, Math.min(h / 250, availW / 360)));
+      const isMobileStacked = typeof document !== 'undefined' && (
+        document.documentElement.classList.contains('mobile-viewport-mode') ||
+        (w < 540 && !document.documentElement.classList.contains('desktop-viewport-mode'))
+      );
+
+      const scale = isMobileStacked
+        ? Math.max(0.98, Math.min(1.18, Math.min(h / 235, w / 330)))
+        : Math.max(0.76, Math.min(1.06, Math.min(h / 250, availW / 360)));
 
       // Compute real-time realized + unrealized PnL directly from trading state
       let realized = 0;
@@ -718,8 +725,12 @@
         totalPnl = equity - baseEq;
       }
 
-      const bagX = Math.max(52, Math.min(76, availW * 0.155));
-      const bagY = h - (openCount > 0 ? 45 : 39) * scale;
+      const bagX = isMobileStacked
+        ? Math.max(58, Math.min(82, w * 0.20))
+        : Math.max(52, Math.min(76, availW * 0.155));
+      const bagY = isMobileStacked
+        ? h - (openCount > 0 ? 50 : 42) * scale
+        : h - (openCount > 0 ? 45 : 39) * scale;
       const mouthX = bagX + 1;
       const mouthY = bagY - 17 * scale;
       this._bagHitbox = { x: bagX, y: bagY, r: 28 * scale };

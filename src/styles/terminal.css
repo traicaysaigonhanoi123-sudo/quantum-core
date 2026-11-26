@@ -2202,9 +2202,21 @@ html.desktop-viewport-mode .modal-card {
     height: auto;
     min-height: 0;
   }
+  html:not(.desktop-viewport-mode) .sphere-hud-overlay {
+    position: static;
+    order: -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px 8px 4px;
+    pointer-events: auto;
+  }
+  html:not(.desktop-viewport-mode) .sphere-hud-overlay .sh-stat {
+    padding: 4px 6px;
+  }
   html:not(.desktop-viewport-mode) .sphere-stage canvas {
     width: 100%;
-    height: 300px;
+    height: 270px;
     flex: none;
   }
   html:not(.desktop-viewport-mode) .venue-cards-stack {
@@ -2247,19 +2259,20 @@ html.desktop-viewport-mode .modal-card {
     min-height: 260px;
   }
 
-  /* 5-Tab Native Mobile App Switching */
+  /* 4-Tab Native Mobile App Switching (Biểu Đồ + Quả Cầu hợp nhất) */
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .col-left,
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .col-right,
-  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .sphere-hero-panel,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .blotter-panel {
+    display: none !important;
+  }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .center-top-row,
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .center-bottom-row {
-    display: none !important;
+    display: contents !important;
   }
-  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .col-left,
-  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .col-right,
-  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .center-top-row,
-  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .blotter-panel {
-    display: none !important;
-  }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .chart-panel { order: 1; min-height: 295px; }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .sphere-hero-panel { order: 2; }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .radar-panel { order: 3; }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .flow-chart-panel { order: 4; }
   html:not(.desktop-viewport-mode)[data-mobile-tab="bot"] .col-center,
   html:not(.desktop-viewport-mode)[data-mobile-tab="bot"] .col-right {
     display: none !important;
@@ -2284,7 +2297,7 @@ html.desktop-viewport-mode .modal-card {
     bottom: 0;
     z-index: 65;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     min-height: 58px;
     padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
     background: #0a0e16;
