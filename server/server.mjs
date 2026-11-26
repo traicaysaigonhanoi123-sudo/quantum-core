@@ -22,6 +22,7 @@ import {
   closeExchangePosition,
   fetchExchangePositions
 } from './exchangeOrderAdapter.mjs';
+import { processAuthAction } from '../api/auth.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -175,6 +176,26 @@ const server = http.createServer(async (req, res) => {
 
   if (!checkRateLimit(ip, 'global', 120)) {
     return sendJson(res, 429, { ok: false, error: 'RATE_LIMIT_EXCEEDED' });
+  }
+
+  if (pathname === '/api/auth') {
+    const cors = getSafeLoopbackCors(req, ip);
+    if (!cors.allowed) {
+      return sendJson(res, 403, { ok: false, error: 'LOOPBACK_ORIGIN_ONLY' });
+    }
+    if (req.method === 'OPTIONS') {
+      applySecurityHeaders(res);
+      res.writeHead(204, cors.headers);
+      return res.end();
+    }
+    try {
+      const query = Object.fromEntries(urlObj.searchParams.entries());
+      const body = req.method === 'POST' ? await readJsonBody(req, 16384) : {};
+      const out = await processAuthAction(req.method, query, body);
+      return sendJson(res, out.status, out.body || {}, cors.headers);
+    } catch (_) {
+      return sendJson(res, 400, { ok: false, error: 'INVALID_AUTH_REQUEST' }, cors.headers);
+    }
   }
 
   // API v1 Routes (Loopback CORS enabled for file:/// and localhost terminals)

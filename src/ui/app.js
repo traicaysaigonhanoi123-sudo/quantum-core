@@ -1265,9 +1265,430 @@
   }
 
   function openApiModal() {
+    if (!currentAuthUser) {
+      openAuthGate('Tài khoản cần đăng nhập Gmail trước khi mở Trung Tâm Kết Nối Đa Sàn.');
+      return;
+    }
+    syncApiModalAccess();
     $('apiModal').classList.remove('hidden');
-    $('btnSaveLiveConn').disabled = !verified2faSession;
     motion.animateModalOpen($('apiModal').querySelector('.modal-card'));
+  }
+
+  /* ==================== GMAIL OTP AUTH, 3-DEVICE TAKEOVER & ADMIN KEY CLIENT ==================== */
+  const AUTH_DB_KEY = 'qc_auth_db_v1';
+  const AUTH_SESSION_KEY = 'qc_auth_session_v1';
+  const DEVICE_ID_KEY = 'qc_device_id_v1';
+  const AuthMod = window.QuantumAccountAuth;
+  const localAuthEngine = AuthMod ? new AuthMod() : null;
+  const authBroadcast = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('qc_auth_sync') : null;
+
+  let authBackendMode = 'LOCAL'; // 'REMOTE' | 'LOCAL'
+  let authRemoteStatus = { mailServerConnected: false, multiDeviceDb: 'LOCAL' };
+  let currentAuthSession = null; // { email, sessionToken, deviceId }
+  let currentAuthUser = null;
+  let activeAuthCaptchaId = null;
+  let activeRegOtpChallengeId = null;
+  let pendingConflictAction = null;
+  let selectedHubVenue = 'BINANCE';
+
+  function getOrCreateDeviceIdentity() {
+    let devId = null;
+    try { devId = localStorage.getItem(DEVICE_ID_KEY); } catch (_) {}
+    if (!devId) {
+      devId = AuthMod ? AuthMod.generateDeviceId() : `dev_${Math.random().toString(36).slice(2, 12)}`;
+      try { localStorage.setItem(DEVICE_ID_KEY, devId); } catch (_) {}
+    }
+    const devLabel = AuthMod ? AuthMod.detectDeviceLabel() : '🌐 Thiết bị Web';
+    return { deviceId: devId, deviceLabel: devLabel };
+  }
+  const currentDevice = getOrCreateDeviceIdentity();
+
+  function loadLocalAuthDb() {
+    if (!localAuthEngine) return;
+    try {
+      const raw = localStorage.getItem(AUTH_DB_KEY);
+      if (raw) localAuthEngine.importDb(JSON.parse(raw));
+    } catch (_) {}
+  }
+
+  function saveLocalAuthDb() {
+    if (!localAuthEngine) return;
+    try {
+      localStorage.setItem(AUTH_DB_KEY, JSON.stringify(localAuthEngine.exportDb()));
+      if (authBroadcast) authBroadcast.postMessage({ type: 'AUTH_DB_UPDATED', deviceId: currentDevice.deviceId });
+    } catch (_) {}
+  }
+
+  function saveAuthSessionLocal(sess) {
+    currentAuthSession = sess;
+    try {
+      if (sess) localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(sess));
+      else localStorage.removeItem(AUTH_SESSION_KEY);
+    } catch (_) {}
+  }
+
+  async function callAuthApi(action, payload = {}) {
+    if (authBackendMode === 'REMOTE') {
+      try {
+        const res = await fetch('/api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, ...payload })
+        });
+        const json = await res.json().catch(() => ({ ok: false, error: `Auth HTTP ${res.status}` }));
+        return json;
+      } catch (err) {
+        return { ok: false, error: err?.message || 'Lỗi kết nối Auth Server.' };
+      }
+    }
+
+    loadLocalAuthDb();
+    let out = { ok: false, error: 'Auth engine unavailable' };
+    if (!localAuthEngine) return out;
+
+    if (action === 'captcha') {
+      out = localAuthEngine.createMathCaptcha();
+    } else if (action === 'register_otp') {
+      out = await localAuthEngine.requestRegisterOtp(payload);
+    } else if (action === 'verify_register') {
+      out = await localAuthEngine.verifyRegisterAndActivate(payload);
+    } else if (action === 'login') {
+      out = await localAuthEngine.login(payload);
+    } else if (action === 'session_check') {
+      out = await localAuthEngine.validateSession(payload);
+    } else if (action === 'logout') {
+      out = await localAuthEngine.logout(payload);
+    } else if (action === 'activate_live') {
+      out = await localAuthEngine.activateLiveKey(payload);
+    } else if (action === 'admin_issue_key') {
+      out = await localAuthEngine.issueLiveActivationKey(payload);
+    } else if (action === 'admin_list_keys') {
+      out = await localAuthEngine.listAdminKeys(payload);
+    } else if (action === 'admin_revoke_key') {
+      out = await localAuthEngine.revokeLiveKey(payload);
+    } else if (action === 'device_revoke') {
+      out = await localAuthEngine.revokeDevice(payload);
+    }
+    saveLocalAuthDb();
+    return out;
+  }
+
+  function showAuthError(msg) {
+    const el = $('authErrorMsg');
+    if (!el) return;
+    if (!msg) {
+      el.classList.add('hidden');
+      el.textContent = '';
+    } else {
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+  }
+
+  async function refreshAuthCaptcha() {
+    const res = await callAuthApi('captcha');
+    if (res && res.ok) {
+      activeAuthCaptchaId = res.captchaId;
+      const box = $('authCaptchaExpr');
+      if (box) box.textContent = res.expression;
+      const inp = $('authCaptchaAns');
+      if (inp) inp.value = '';
+    }
+  }
+
+  function switchAuthTab(tabName) {
+    const isReg = tabName !== 'login';
+    $('authTabRegister')?.classList.toggle('active', isReg);
+    $('authTabLogin')?.classList.toggle('active', !isReg);
+    $('authRegPane')?.classList.toggle('active', isReg);
+    $('authLoginPane')?.classList.toggle('active', !isReg);
+    $('authConflictBox')?.classList.add('hidden');
+    pendingConflictAction = null;
+    showAuthError('');
+  }
+
+  function updateAccountTopbarUI() {
+    const badge = $('accountRoleBadge');
+    const lbl = $('accountEmailLabel');
+    if (!badge || !lbl) return;
+    if (!currentAuthUser) {
+      badge.textContent = 'AUTH';
+      badge.className = 'acc-role-dot';
+      lbl.textContent = 'Đăng nhập';
+      return;
+    }
+    const shortName = currentAuthUser.email.split('@')[0];
+    lbl.textContent = shortName;
+    if (currentAuthUser.isAdmin) {
+      badge.textContent = 'ADMIN';
+      badge.className = 'acc-role-dot admin';
+    } else if (currentAuthUser.liveActivated) {
+      badge.textContent = 'LIVE';
+      badge.className = 'acc-role-dot live';
+    } else {
+      badge.textContent = 'DEMO';
+      badge.className = 'acc-role-dot';
+    }
+  }
+
+  function openAuthGate(errorBanner = '') {
+    $('authDeviceLabel').textContent = currentDevice.deviceLabel;
+    $('authDeviceId').textContent = `ID: ${currentDevice.deviceId.slice(0, 11)}...`;
+    $('authConflictBox')?.classList.add('hidden');
+    pendingConflictAction = null;
+    showAuthError(errorBanner);
+    $('authGateOverlay')?.classList.remove('hidden');
+    refreshAuthCaptcha();
+  }
+
+  function completeAuthUnlock(authRes) {
+    currentAuthUser = authRes.user;
+    saveAuthSessionLocal({
+      email: authRes.user.email,
+      sessionToken: authRes.sessionToken,
+      deviceId: authRes.deviceId || currentDevice.deviceId
+    });
+    $('authGateOverlay')?.classList.add('hidden');
+    $('authConflictBox')?.classList.add('hidden');
+    pendingConflictAction = null;
+    showAuthError('');
+    if ($('otpEmail')) $('otpEmail').value = currentAuthUser.email;
+    updateAccountTopbarUI();
+    syncApiModalAccess();
+    showToast({
+      type: currentAuthUser.liveActivated ? 'pos' : 'cyan',
+      title: authRes.tookOver ? '✅ ĐÃ THOÁT THIẾT BỊ KIA & VÀO NGAY' : '✅ XÁC THỰC GMAIL THÀNH CÔNG',
+      msg: `${currentAuthUser.email} • ${currentAuthUser.accountTierLabel} (${currentAuthUser.deviceCount}/3 thiết bị)`
+    });
+  }
+
+  async function executeAuthWithConflictHandling(action, payload) {
+    showAuthError('');
+    const res = await callAuthApi(action, {
+      ...payload,
+      deviceId: currentDevice.deviceId,
+      deviceLabel: currentDevice.deviceLabel
+    });
+
+    if (res.ok) {
+      completeAuthUnlock(res);
+      return res;
+    }
+
+    if (res.code === 'ACTIVE_SESSION_CONFLICT') {
+      pendingConflictAction = { action, payload };
+      const actDev = res.activeDevice;
+      $('authConflictMsg').textContent =
+        `Tài khoản đang hoạt động trên "${actDev?.deviceLabel || 'Thiết bị khác'}" (${actDev?.deviceId || ''}). Bạn có chắc chắn muốn thoát ở thiết bị kia để đăng nhập vào thiết bị này không?`;
+      $('authConflictBox').classList.remove('hidden');
+      motion.wiggleReject($('authConflictBox'));
+      return res;
+    }
+
+    showAuthError(res.error || 'Đăng nhập thất bại.');
+    if (action === 'register_otp' || res.code === 'INVALID_CAPTCHA') refreshAuthCaptcha();
+    return res;
+  }
+
+  function renderHubVenues() {
+    const grid = $('hubVenueCards');
+    if (!grid) return;
+    const isLiveLinked = Boolean(trading.mode === 'LIVE' && trading.liveConfig.connected);
+    const venues = [
+      { id: 'HYPERLIQUID', name: 'Hyperliquid', dot: '#34d399', mtab: 'hyperliquid' },
+      { id: 'BINANCE', name: 'Binance', dot: '#fbbf24', mtab: 'cex' },
+      { id: 'BYBIT', name: 'Bybit', dot: '#fb923c', mtab: 'cex' },
+      { id: 'OKX', name: 'OKX', dot: '#60a5fa', mtab: 'cex' },
+      { id: 'DERIBIT', name: 'Deribit', dot: '#c084fc', mtab: 'cex' }
+    ];
+    grid.innerHTML = venues.map((v) => {
+      const linkedHere = isLiveLinked && trading.liveConfig.venueId === v.id;
+      const isSelected = selectedHubVenue === v.id;
+      return `
+        <button type="button" class="hub-venue-chip${isSelected ? ' active' : ''}" data-hvenue="${v.id}" data-hmtab="${v.mtab}">
+          <div class="hvc-top"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${v.dot};"></span>${v.name}</div>
+          <div class="hvc-status ${linkedHere ? 'pos' : ''}">${linkedHere ? '● Đã liên kết' : '○ Chưa liên kết'}</div>
+        </button>`;
+    }).join('');
+
+    const execLbl = $('hubExecVenueLabel');
+    if (execLbl) {
+      execLbl.textContent = market.activeExchange === 'ALL'
+        ? '🌐 Đa sàn (5 sàn đồng thời)'
+        : `🟡 ${market.activeExchange}`;
+    }
+  }
+
+  function syncApiModalAccess() {
+    renderHubVenues();
+    const isLiveCapable = Boolean(currentAuthUser && currentAuthUser.liveActivated);
+    const lockCard = $('demoLiveLockCard');
+    const unlockedWrap = $('liveBridgeUnlockedWrap');
+    const demoEmailSpan = $('demoLockEmailSpan');
+    const adminBtn = $('btnOpenAdminFromApi');
+    if (demoEmailSpan) demoEmailSpan.textContent = currentAuthUser ? currentAuthUser.email : 'Chưa đăng nhập';
+    if (lockCard) lockCard.classList.toggle('hidden', isLiveCapable);
+    if (unlockedWrap) unlockedWrap.classList.toggle('hidden', !isLiveCapable);
+    if (adminBtn) adminBtn.classList.toggle('hidden', !Boolean(currentAuthUser && currentAuthUser.isAdmin));
+    if (currentAuthUser && $('otpEmail')) $('otpEmail').value = currentAuthUser.email;
+    const saveBtn = $('btnSaveLiveConn');
+    if (saveBtn) saveBtn.disabled = !isLiveCapable || !verified2faSession;
+  }
+
+  async function renderAccountModal() {
+    if (!currentAuthUser) return;
+    $('accEmailDisplay').textContent = currentAuthUser.email;
+    const tierEl = $('accTierBadge');
+    tierEl.textContent = currentAuthUser.accountTierLabel;
+    tierEl.className = `acc-tier-pill${currentAuthUser.liveActivated ? ' live' : ''}`;
+    $('accountDeviceCount').textContent = `${currentAuthUser.deviceCount}/${currentAuthUser.maxDevices}`;
+
+    const devList = $('accountDevicesList');
+    devList.innerHTML = (currentAuthUser.devices || []).map((d) => {
+      const isCur = d.deviceId === currentDevice.deviceId;
+      return `
+        <div class="acc-dev-row">
+          <div>
+            <strong>${d.deviceLabel}</strong> ${isCur ? '<span class="cyan">(Thiết bị này)</span>' : ''}
+            <div class="muted" style="font-size:8.5px;">${d.deviceId} • ${d.active ? '<span class="pos">Đang hoạt động</span>' : 'Tạm ngưng'}</div>
+          </div>
+          ${!isCur ? `<button type="button" class="btn btn-xs btn-danger-outline" data-kick-dev="${d.deviceId}">Thoát thiết bị</button>` : '<span class="pos" style="font-size:9px;">● ACTIVE</span>'}
+        </div>`;
+    }).join('');
+
+    const adminPanel = $('adminKeyPanel');
+    if (currentAuthUser.isAdmin) {
+      adminPanel.classList.remove('hidden');
+      const keysRes = await callAuthApi('admin_list_keys', {
+        adminEmail: currentAuthSession.email,
+        adminSessionToken: currentAuthSession.sessionToken,
+        adminDeviceId: currentDevice.deviceId
+      });
+      if (keysRes.ok) {
+        const listEl = $('admKeysList');
+        if (!keysRes.keys || keysRes.keys.length === 0) {
+          listEl.innerHTML = '<div class="muted" style="font-size:9.5px;">Chưa cấp mã LIVE nào — nhập Gmail (hoặc để trống) rồi bấm "Tạo Mã LIVE".</div>';
+        } else {
+          listEl.innerHTML = keysRes.keys.slice(0, 10).map((k) => {
+            const stTxt = k.revoked ? '<span class="neg">Đã thu hồi</span>' : (k.usedBy ? `<span class="pos">Đã kích hoạt (${k.usedBy})</span>` : '<span class="gold">Chưa dùng</span>');
+            return `
+              <div class="adm-key-row">
+                <div>
+                  <strong>${k.keyHint}</strong> • <span class="muted">${k.targetEmail === '*' ? 'Mọi Gmail' : k.targetEmail}</span>
+                  <div>${stTxt}</div>
+                </div>
+                ${(!k.usedBy && !k.revoked) ? `<button type="button" class="btn btn-xs btn-danger-outline" data-rev-key="${k.id}">Thu hồi</button>` : ''}
+              </div>`;
+          }).join('');
+        }
+      }
+    } else {
+      adminPanel.classList.add('hidden');
+    }
+  }
+
+  async function openAccountModal() {
+    if (!currentAuthUser) {
+      openAuthGate();
+      return;
+    }
+    await renderAccountModal();
+    $('accountModal').classList.remove('hidden');
+    motion.animateModalOpen($('accountModal').querySelector('.modal-card'));
+  }
+
+  async function checkSessionHeartbeat() {
+    if (!currentAuthSession || !currentAuthUser) return;
+    const res = await callAuthApi('session_check', {
+      email: currentAuthSession.email,
+      sessionToken: currentAuthSession.sessionToken,
+      deviceId: currentDevice.deviceId
+    });
+    if (res.ok && res.user) {
+      currentAuthUser = res.user;
+      updateAccountTopbarUI();
+      return;
+    }
+    if (res.code === 'SESSION_KICKED' || res.code === 'SESSION_EXPIRED' || res.code === 'SESSION_INVALID') {
+      if (trading.botRunning) trading.toggleBot();
+      if (trading.mode === 'LIVE') {
+        liveSessionCredentials = null;
+        trading.setLiveExecutionAdapter(null);
+        trading.revokeLiveSessions();
+      }
+      saveAuthSessionLocal(null);
+      currentAuthUser = null;
+      updateAccountTopbarUI();
+      $('apiModal')?.classList.add('hidden');
+      $('accountModal')?.classList.add('hidden');
+      openAuthGate(res.error || 'Tài khoản đã đăng nhập trên thiết bị khác và tự động thoát ở đây.');
+      showToast({
+        type: 'neg',
+        title: '⚠ ĐÃ ĐĂNG XUẤT TỰ ĐỘNG',
+        msg: res.error || 'Tài khoản vừa đăng nhập ở thiết bị khác.'
+      });
+    }
+  }
+
+  async function initAccountAuthGate() {
+    try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 1800) : null;
+      const r = await fetch('/api/auth?action=status', ctrl ? { signal: ctrl.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.ok) {
+          authBackendMode = 'REMOTE';
+          authRemoteStatus = j;
+        }
+      }
+    } catch (_) {
+      authBackendMode = 'LOCAL';
+    }
+
+    const dotEl = $('authMailDot');
+    const txtEl = $('authMailStatusText');
+    if (txtEl) {
+      if (authBackendMode === 'REMOTE' && authRemoteStatus.mailServerConnected) {
+        txtEl.textContent = 'Đã kết nối Mail Server (Resend Gmail OTP)';
+        if (dotEl) dotEl.className = 'status-dot live';
+      } else if (authBackendMode === 'REMOTE') {
+        txtEl.textContent = 'Auth Server Online (Sandbox OTP Preview — thêm RESEND_API_KEY để gửi Gmail thật)';
+        if (dotEl) dotEl.className = 'status-dot live';
+      } else {
+        txtEl.textContent = 'Chế độ Xác thực Cục bộ (Đồng bộ đa tab • Deploy Vercel để đồng bộ đa thiết bị)';
+        if (dotEl) dotEl.className = 'status-dot live';
+      }
+    }
+
+    try {
+      const savedRaw = localStorage.getItem(AUTH_SESSION_KEY);
+      if (savedRaw) {
+        const saved = JSON.parse(savedRaw);
+        if (saved && saved.email && saved.sessionToken) {
+          const check = await callAuthApi('session_check', {
+            email: saved.email,
+            sessionToken: saved.sessionToken,
+            deviceId: currentDevice.deviceId
+          });
+          if (check.ok && check.user) {
+            currentAuthSession = { email: saved.email, sessionToken: saved.sessionToken, deviceId: currentDevice.deviceId };
+            currentAuthUser = check.user;
+            $('authGateOverlay')?.classList.add('hidden');
+            updateAccountTopbarUI();
+            syncApiModalAccess();
+            return;
+          }
+          saveAuthSessionLocal(null);
+          openAuthGate(check.error || 'Phiên trước đã hết hạn hoặc bị đăng xuất từ thiết bị khác.');
+          return;
+        }
+      }
+    } catch (_) {}
+
+    updateAccountTopbarUI();
+    openAuthGate();
   }
 
   function bindAllEvents() {
@@ -1792,6 +2213,220 @@
     $('btnVerifyOtp').addEventListener('click', verifyOtpFlow);
     $('btnRevokeSessions').addEventListener('click', revokeAllSessionsFlow);
 
+    // Auth Gate Overlay Events (Gmail OTP + CAPTCHA + Active-Device Yes/No Takeover)
+    $('authTabRegister')?.addEventListener('click', () => switchAuthTab('register'));
+    $('authTabLogin')?.addEventListener('click', () => switchAuthTab('login'));
+    $('btnRefreshCaptcha')?.addEventListener('click', refreshAuthCaptcha);
+
+    $('btnSendRegOtp')?.addEventListener('click', async () => {
+      showAuthError('');
+      const email = $('authRegEmail').value.trim();
+      const captchaAnswer = $('authCaptchaAns').value.trim();
+      const res = await callAuthApi('register_otp', {
+        email,
+        captchaId: activeAuthCaptchaId,
+        captchaAnswer,
+        deviceId: currentDevice.deviceId,
+        deviceLabel: currentDevice.deviceLabel
+      });
+      if (!res.ok) {
+        showAuthError(res.error || 'Không gửi được OTP.');
+        refreshAuthCaptcha();
+        motion.wiggleReject($('authRegPane'));
+        return;
+      }
+      activeRegOtpChallengeId = res.challengeId;
+      $('authRegStep2')?.classList.remove('hidden');
+      $('authRegOtpHint').innerHTML = res.mailSent
+        ? `✉️ Đã gửi mã OTP 6 số thật tới <strong>${res.email}</strong> (hết hạn 10 phút).`
+        : `🔐 Mã OTP xác thực <strong>${res.email}</strong>: <strong>${res.devPreviewOtp || '******'}</strong> (hết hạn 10 phút).`;
+      showToast({
+        type: 'gold',
+        title: 'ĐÃ TẠO MÃ OTP GMAIL',
+        msg: res.mailSent ? `Kiểm tra hộp thư ${res.email}` : `Sandbox OTP: ${res.devPreviewOtp}`
+      });
+    });
+
+    $('btnConfirmRegOtp')?.addEventListener('click', async () => {
+      await executeAuthWithConflictHandling('verify_register', {
+        challengeId: activeRegOtpChallengeId,
+        email: $('authRegEmail').value.trim(),
+        otp: $('authRegOtp').value.trim(),
+        password: $('authRegPassword').value
+      });
+    });
+
+    $('btnSubmitLogin')?.addEventListener('click', async () => {
+      await executeAuthWithConflictHandling('login', {
+        email: $('authLoginEmail').value.trim(),
+        password: $('authLoginPassword').value
+      });
+    });
+
+    $('btnConflictNo')?.addEventListener('click', () => {
+      $('authConflictBox')?.classList.add('hidden');
+      pendingConflictAction = null;
+      showAuthError('Đã hủy đăng nhập — giữ nguyên phiên đang chạy trên thiết bị kia.');
+    });
+
+    $('btnConflictYes')?.addEventListener('click', async () => {
+      if (!pendingConflictAction) return;
+      const { action, payload } = pendingConflictAction;
+      await executeAuthWithConflictHandling(action, { ...payload, forceTakeover: true });
+    });
+
+    // Multi-Venue Hub + Demo Activation Key + Account/Admin Modal Events
+    $('hubVenueCards')?.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-hvenue]');
+      if (!chip) return;
+      selectedHubVenue = chip.dataset.hvenue;
+      const mtab = chip.dataset.hmtab;
+      if (mtab === 'cex' && $('cexExchange')) {
+        $('cexExchange').value = selectedHubVenue;
+      }
+      document.querySelectorAll('.mtab').forEach((b) => b.classList.toggle('active', b.dataset.mtab === mtab));
+      $('mtabHyperliquid')?.classList.toggle('active', mtab === 'hyperliquid');
+      $('mtabCex')?.classList.toggle('active', mtab === 'cex');
+      renderHubVenues();
+      updateLiveExecWarningUI();
+    });
+
+    $('btnHubSetPrimary')?.addEventListener('click', () => {
+      selectExchange(selectedHubVenue);
+      renderHubVenues();
+      showToast({ type: 'gold', title: `SÀN CHÍNH: ${selectedHubVenue}`, msg: `Đã chọn ${selectedHubVenue} làm sàn thực thi chính.` });
+    });
+
+    $('btnHubMultiVenue')?.addEventListener('click', () => {
+      selectExchange('ALL');
+      renderHubVenues();
+      showToast({ type: 'cyan', title: 'CHẾ ĐỘ ĐA SÀN (5 SÀN)', msg: 'Quét & đối chiếu chênh lệch 5 sàn đồng thời.' });
+    });
+
+    $('btnActivateLiveKey')?.addEventListener('click', async () => {
+      const key = $('inpLiveActivationKey').value.trim();
+      const msgEl = $('liveKeyStatusMsg');
+      if (!currentAuthSession) {
+        openAuthGate('Hãy đăng nhập Gmail trước khi kích hoạt mã LIVE.');
+        return;
+      }
+      const res = await callAuthApi('activate_live', {
+        email: currentAuthSession.email,
+        sessionToken: currentAuthSession.sessionToken,
+        deviceId: currentDevice.deviceId,
+        activationKey: key
+      });
+      if (!res.ok) {
+        if (msgEl) {
+          msgEl.textContent = res.error || 'Kích hoạt thất bại.';
+          msgEl.className = 'demo-lock-status';
+        }
+        motion.wiggleReject($('demoLiveLockCard'));
+        return;
+      }
+      currentAuthUser = res.user;
+      updateAccountTopbarUI();
+      syncApiModalAccess();
+      showToast({ type: 'pos', title: '🔓 ĐÃ MỞ KHÓA TÀI KHOẢN CHÍNH (LIVE)', msg: 'Bạn đã có quyền liên kết API sàn thật!' });
+    });
+
+    $('btnAccountMenu')?.addEventListener('click', openAccountModal);
+    $('btnOpenAdminFromApi')?.addEventListener('click', openAccountModal);
+    $('btnCloseAccountModal')?.addEventListener('click', () => $('accountModal').classList.add('hidden'));
+    $('accountModal')?.addEventListener('click', (e) => {
+      if (e.target === $('accountModal')) $('accountModal').classList.add('hidden');
+    });
+    $('btnOpenHubFromAccount')?.addEventListener('click', () => {
+      $('accountModal').classList.add('hidden');
+      openApiModal();
+    });
+
+    $('accountDevicesList')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-kick-dev]');
+      if (!btn || !currentAuthSession) return;
+      const res = await callAuthApi('device_revoke', {
+        email: currentAuthSession.email,
+        sessionToken: currentAuthSession.sessionToken,
+        deviceId: currentDevice.deviceId,
+        targetDeviceId: btn.dataset.kickDev
+      });
+      if (res.ok) {
+        currentAuthUser = res.user;
+        await renderAccountModal();
+        showToast({ type: 'gold', title: 'ĐÃ THOÁT THIẾT BỊ', msg: `Đã gỡ thiết bị ${btn.dataset.kickDev} khỏi tài khoản.` });
+      }
+    });
+
+    $('btnAdminIssueKey')?.addEventListener('click', async () => {
+      if (!currentAuthSession) return;
+      const targetEmail = $('admKeyTargetEmail').value.trim() || '*';
+      const res = await callAuthApi('admin_issue_key', {
+        adminEmail: currentAuthSession.email,
+        adminSessionToken: currentAuthSession.sessionToken,
+        adminDeviceId: currentDevice.deviceId,
+        targetEmail
+      });
+      if (!res.ok) {
+        showToast({ type: 'neg', title: 'LỖI CẤP MÃ LIVE', msg: res.error || 'Không có quyền Admin.' });
+        return;
+      }
+      $('admGeneratedKeyVal').textContent = res.activationKey;
+      $('admGeneratedKeyBox')?.classList.remove('hidden');
+      await renderAccountModal();
+      showToast({ type: 'pos', title: '🔑 ĐÃ TẠO MÃ KÍCH HOẠT LIVE', msg: res.activationKey });
+    });
+
+    $('btnCopyAdminKey')?.addEventListener('click', async () => {
+      const code = $('admGeneratedKeyVal')?.textContent?.trim();
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        showToast({ type: 'cyan', title: 'ĐÃ COPY MÃ', msg: code });
+      } catch (_) {
+        showToast({ type: 'gold', title: 'MÃ KÍCH HOẠT', msg: code });
+      }
+    });
+
+    $('admKeysList')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-rev-key]');
+      if (!btn || !currentAuthSession) return;
+      const res = await callAuthApi('admin_revoke_key', {
+        adminEmail: currentAuthSession.email,
+        adminSessionToken: currentAuthSession.sessionToken,
+        adminDeviceId: currentDevice.deviceId,
+        keyId: btn.dataset.revKey
+      });
+      if (res.ok) await renderAccountModal();
+    });
+
+    $('btnLogoutAccount')?.addEventListener('click', async () => {
+      if (currentAuthSession) {
+        await callAuthApi('logout', {
+          email: currentAuthSession.email,
+          sessionToken: currentAuthSession.sessionToken,
+          deviceId: currentDevice.deviceId
+        });
+      }
+      if (trading.botRunning) trading.toggleBot();
+      saveAuthSessionLocal(null);
+      currentAuthUser = null;
+      updateAccountTopbarUI();
+      $('accountModal').classList.add('hidden');
+      openAuthGate('Bạn đã đăng xuất khỏi thiết bị này.');
+    });
+
+    if (authBroadcast) {
+      authBroadcast.addEventListener('message', (ev) => {
+        if (ev?.data?.type === 'AUTH_DB_UPDATED' && ev.data.deviceId !== currentDevice.deviceId) {
+          checkSessionHeartbeat();
+        }
+      });
+    }
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === AUTH_DB_KEY) checkSessionHeartbeat();
+    });
+    setInterval(checkSessionHeartbeat, 12000);
+
     $('apiModalTabs').addEventListener('click', (e) => {
       const btn = e.target.closest('.mtab');
       if (!btn) return;
@@ -1810,6 +2445,11 @@
     $('btnSyncRealBalance').addEventListener('click', () => syncConnectedLiveBalance({ silent: false }));
 
     $('btnSaveLiveConn').addEventListener('click', async () => {
+      if (!currentAuthUser || !currentAuthUser.liveActivated) {
+        syncApiModalAccess();
+        showToast({ type: 'neg', title: 'CẦN MÃ KÍCH HOẠT LIVE', msg: 'Tài khoản Demo chưa mở khóa LIVE. Nhập mã LIVE-XXXX-XXXX-XXXX từ Admin.' });
+        return;
+      }
       if (!verified2faSession) {
         showToast({ type: 'neg', title: 'YÊU CẦU XÁC THỰC 2FA', msg: 'Vui lòng xác minh mã OTP HMAC trước khi mở Live Bridge.' });
         motion.wiggleReject($('otpGateBox'));
@@ -2097,6 +2737,7 @@
   renderTradingPanels();
   motion.animateBoot();
   market.toggleLiveWebSocket(true);
+  initAccountAuthGate();
   if (restoredSession && (trading.botRunning || trading.positions.length > 0)) {
     showToast({
       type: 'cyan',

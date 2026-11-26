@@ -113,6 +113,11 @@
         API / DEX
       </button>
 
+      <button class="btn btn-xs btn-cyan-outline account-menu-btn" id="btnAccountMenu" title="Quản lý Tài khoản Gmail, Thiết bị & Mã Kích Hoạt LIVE">
+        <span class="acc-role-dot" id="accountRoleBadge">DEMO</span>
+        <span id="accountEmailLabel">Đăng nhập</span>
+      </button>
+
       <button class="btn btn-xs btn-ghost" id="btnCmdPalette" title="Mở Command Palette (Ctrl+K / Cmd+K)">
         ⌘K
       </button>
@@ -734,159 +739,316 @@
     </button>
   </nav>
 
-  <!-- ==================== LIVE API / HYPERLIQUID DEX + ZERO-TRUST 2FA MODAL ==================== -->
-  <div class="modal-backdrop hidden" id="apiModal" role="dialog" aria-modal="true" aria-labelledby="apiModalTitle">
-    <div class="modal-card">
-      <div class="modal-hdr">
-        <div>
-          <h2 id="apiModalTitle">ZERO-TRUST LIVE API CEX &amp; VÍ HYPERLIQUID DEX</h2>
-          <p class="modal-sub">Bắt buộc xác thực 2FA HMAC-SHA256 OTP &amp; ràng buộc IP trước khi kích hoạt Live Bridge</p>
+  <!-- ==================== GMAIL OTP AUTH & 3-DEVICE GATE OVERLAY ==================== -->
+  <div class="auth-gate-backdrop" id="authGateOverlay" role="dialog" aria-modal="true" aria-labelledby="authGateTitle">
+    <div class="auth-gate-card">
+      <div class="auth-shield-emblem" aria-hidden="true">🛡️</div>
+      <h1 class="auth-gate-title" id="authGateTitle">Xác Thực Gmail &amp; Kích Hoạt Thiết Bị</h1>
+      <p class="auth-gate-sub">
+        Bắt buộc xác thực <strong class="gold">@gmail.com thật</strong>. Mỗi tài khoản Gmail được phép kích hoạt trên
+        <strong class="mint">tối đa 3 thiết bị</strong>.
+      </p>
+
+      <div class="auth-device-pill">
+        <span class="auth-dev-name" id="authDeviceLabel">📱 Thiết bị hiện tại</span>
+        <span class="auth-dev-id" id="authDeviceId">ID: dev_...</span>
+      </div>
+
+      <div class="auth-tabs" role="tablist">
+        <button type="button" class="auth-tab active" id="authTabRegister" data-authtab="register">Đăng ký / OTP Gmail</button>
+        <button type="button" class="auth-tab" id="authTabLogin" data-authtab="login">Đã có tài khoản</button>
+      </div>
+
+      <!-- Register + OTP Gmail Pane -->
+      <div class="auth-pane active" id="authRegPane">
+        <div class="auth-field">
+          <label for="authRegEmail">Địa chỉ Gmail thật</label>
+          <input type="email" id="authRegEmail" placeholder="tenban@gmail.com" autocomplete="email" />
         </div>
-        <button class="modal-close" id="btnCloseApiModal" aria-label="Đóng">✕</button>
+
+        <div class="auth-field">
+          <label for="authCaptchaAns">Mã xác minh chống bot (CAPTCHA)</label>
+          <div class="auth-captcha-row">
+            <div class="auth-captcha-box" id="authCaptchaExpr">-- + -- = ?</div>
+            <button type="button" class="btn btn-xs btn-ghost auth-cap-ref" id="btnRefreshCaptcha" title="Đổi phép tính khác">🔄</button>
+            <input type="number" id="authCaptchaAns" class="auth-cap-inp" placeholder="Kết quả..." />
+          </div>
+        </div>
+
+        <button type="button" class="btn auth-cta-btn" id="btnSendRegOtp">
+          Gửi mã OTP xác thực Gmail →
+        </button>
+
+        <div class="auth-step2 hidden" id="authRegStep2">
+          <div class="auth-otp-hint" id="authRegOtpHint">Đã gửi mã OTP 6 số tới Gmail của bạn.</div>
+          <div class="auth-field">
+            <label for="authRegOtp">Mã OTP 6 số từ Gmail</label>
+            <input type="text" id="authRegOtp" maxlength="6" placeholder="Nhập 6 số OTP..." autocomplete="one-time-code" />
+          </div>
+          <div class="auth-field">
+            <label for="authRegPassword">Tạo mật khẩu riêng cho ứng dụng (≥ 6 ký tự)</label>
+            <input type="password" id="authRegPassword" placeholder="Không dùng chung mật khẩu Gmail..." autocomplete="new-password" />
+          </div>
+          <button type="button" class="btn auth-cta-btn" id="btnConfirmRegOtp">
+            Xác nhận OTP &amp; Kích hoạt thiết bị →
+          </button>
+        </div>
+      </div>
+
+      <!-- Login Existing Account Pane -->
+      <div class="auth-pane" id="authLoginPane">
+        <div class="auth-field">
+          <label for="authLoginEmail">Địa chỉ Gmail đã đăng ký</label>
+          <input type="email" id="authLoginEmail" placeholder="tenban@gmail.com" autocomplete="email" />
+        </div>
+        <div class="auth-field">
+          <label for="authLoginPassword">Mật khẩu ứng dụng</label>
+          <input type="password" id="authLoginPassword" placeholder="Nhập mật khẩu ứng dụng..." autocomplete="current-password" />
+        </div>
+        <button type="button" class="btn auth-cta-btn" id="btnSubmitLogin">
+          Đăng nhập thiết bị này →
+        </button>
+      </div>
+
+      <!-- Mandatory Yes/No Active-Device Conflict Prompt -->
+      <div class="auth-conflict-box hidden" id="authConflictBox" role="alert">
+        <div class="auth-conflict-title">⚠ CẢNH BÁO: TÀI KHOẢN ĐANG CHẠY TRÊN THIẾT BỊ KHÁC</div>
+        <p class="auth-conflict-msg" id="authConflictMsg">
+          Tài khoản đang hoạt động trên thiết bị khác. Bạn có muốn thoát thiết bị kia để đăng nhập thiết bị này không?
+        </p>
+        <div class="auth-conflict-actions">
+          <button type="button" class="btn btn-sm btn-ghost" id="btnConflictNo">KHÔNG — Giữ thiết bị kia</button>
+          <button type="button" class="btn btn-sm auth-cta-btn" id="btnConflictYes">CÓ — Thoát thiết bị kia &amp; Vào ngay</button>
+        </div>
+      </div>
+
+      <div class="auth-error-msg hidden" id="authErrorMsg"></div>
+
+      <div class="auth-mail-status">
+        <span>Trạng thái Mail Server:</span>
+        <span class="status-dot live" id="authMailDot"></span>
+        <span id="authMailStatusText">Đang kiểm tra kết nối Mail Server...</span>
+      </div>
+
+      <div class="auth-disclaimer">
+        <div class="auth-disc-title">ℹ QUANTUM CORE — Công cụ tự động hóa cá nhân độc lập</div>
+        <p>
+          Ứng dụng này <strong>KHÔNG phải trang chủ Binance, Hyperliquid hay Google</strong> và không thuộc sở hữu của bất kỳ sàn nào.
+          Vui lòng tạo <strong>mật khẩu riêng biệt cho ứng dụng</strong> (tuyệt đối không nhập mật khẩu Gmail hay mật khẩu tài khoản sàn).
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== LIVE API / TRUNG TÂM KẾT NỐI ĐA SÀN MODAL ==================== -->
+  <div class="modal-backdrop hidden" id="apiModal" role="dialog" aria-modal="true" aria-labelledby="apiModalTitle">
+    <div class="modal-card hub-modal-card">
+      <div class="modal-hdr hub-hdr">
+        <div class="hub-hdr-left">
+          <div class="hub-globe-ico" aria-hidden="true">🌐</div>
+          <div>
+            <h2 id="apiModalTitle">Trung Tâm Kết Nối Đa Sàn</h2>
+            <p class="modal-sub">Hyperliquid • Binance • Bybit • OKX • Deribit (Đánh Long/Short độc lập hoặc đa sàn)</p>
+          </div>
+        </div>
+        <div class="modal-ftr-right">
+          <span class="hub-top-pill">5 Sàn Hàng Đầu</span>
+          <button class="modal-close" id="btnCloseApiModal" aria-label="Đóng">✕</button>
+        </div>
       </div>
 
       <div class="modal-scroll-area">
-        <div class="security-alert">
-          <div class="sec-title">⚠ CẢNH BÁO BẢO MẬT QUAN TRỌNG (ZERO-TRUST READ BEFORE CONNECTING)</div>
+        <!-- 5-Venue Link Status Grid -->
+        <div class="hub-venues-grid" id="hubVenueCards"></div>
+
+        <div class="hub-exec-bar">
+          <span class="muted">Chế độ sàn thực thi:</span>
+          <strong class="gold" id="hubExecVenueLabel">🟡 Hyperliquid / Binance</strong>
+          <div class="hub-exec-actions">
+            <button type="button" class="btn btn-xs auth-cta-btn" id="btnHubSetPrimary">Chọn làm sàn chính</button>
+            <button type="button" class="btn btn-xs btn-ghost" id="btnHubMultiVenue">🌐 Đa sàn</button>
+          </div>
+        </div>
+
+        <!-- Demo Activation Key Lock Card (Shown when account is Demo) -->
+        <div class="demo-lock-card" id="demoLiveLockCard">
+          <div class="demo-lock-top">
+            <div class="demo-lock-ico" aria-hidden="true">🔓</div>
+            <div>
+              <div class="demo-lock-title">Tài khoản Demo — Cần Mã Kích Hoạt Tài Khoản Chính</div>
+              <p class="demo-lock-desc">
+                Tài khoản <strong id="demoLockEmailSpan">trader@gmail.com</strong> hiện chỉ được phép chạy
+                <strong>Demo (Paper Trading)</strong>. Để liên kết API sàn thật (Hyperliquid, Binance, Bybit, OKX, Deribit)
+                và bật <strong>LIVE</strong>, vui lòng nhập <strong>Mã kích hoạt riêng</strong> do Admin cấp:
+              </p>
+            </div>
+          </div>
+          <div class="demo-lock-input-row">
+            <input type="text" id="inpLiveActivationKey" placeholder="LIVE-XXXX-XXXX-XXXX" autocomplete="off" />
+            <button type="button" class="btn auth-cta-btn" id="btnActivateLiveKey">Kích hoạt</button>
+          </div>
+          <div class="demo-lock-status hidden" id="liveKeyStatusMsg"></div>
+        </div>
+
+        <!-- Unlocked Live Bridge Controls (Shown only for LIVE-activated & Admin accounts) -->
+        <div class="live-bridge-unlocked-wrap hidden" id="liveBridgeUnlockedWrap">
+          <div class="live-unlocked-banner" id="liveUnlockedBar">
+            <span>⚡ TÀI KHOẢN CHÍNH (LIVE) ĐÃ KÍCH HOẠT — Sẵn sàng liên kết API &amp; đẩy lệnh</span>
+            <button type="button" class="btn btn-xs btn-cyan-outline hidden" id="btnOpenAdminFromApi">🔑 Tạo Mã Admin</button>
+          </div>
+
+          <div class="security-alert">
+            <div class="sec-title">⚠ CẢNH BÁO BẢO MẬT QUAN TRỌNG (ZERO-TRUST READ BEFORE CONNECTING)</div>
+            <ul>
+              <li><strong>Tuyệt đối KHÔNG cấp quyền Rút tiền (Withdraw)</strong> cho bất kỳ API Key CEX nào. Luôn bật <strong>IP Whitelist</strong>.</li>
+              <li>Với <strong>Hyperliquid DEX</strong>, chỉ nhập <strong>API Agent Wallet Key</strong> (không có quyền rút USDC khỏi ví chính) và test <strong>Testnet</strong> trước.</li>
+              <li>Khóa chỉ lưu trong <strong>RAM phiên</strong>; hệ thống áp dụng <strong>2FA OTP (HMAC-SHA256, 10 phút, tối đa 5 lần sai, 60s cooldown)</strong> &amp; thu hồi phiên trên mọi thiết bị.</li>
+            </ul>
+          </div>
+
+          <!-- Zero-Trust 2FA HMAC OTP Verification Gate -->
+          <div class="otp-gate-box" id="otpGateBox">
+            <div class="otp-gate-hdr">
+              <span>🛡 BƯỚC 1: XÁC THỰC 2FA (HMAC-SHA256 OTP + IP BINDING)</span>
+              <button type="button" class="btn btn-xs btn-danger-outline" id="btnRevokeSessions">Thu Hồi Mọi Phiên</button>
+            </div>
+            <div class="otp-row">
+              <input type="email" id="otpEmail" value="trader@quantum.io" placeholder="Gmail nhận OTP 6 số..." />
+              <button type="button" class="btn btn-xs btn-cyan-outline" id="btnSendOtp">Gửi OTP</button>
+              <input type="text" id="inpOtpCode" maxlength="6" placeholder="Mã OTP 6 số" autocomplete="one-time-code" />
+              <button type="button" class="btn btn-xs btn-cyan" id="btnVerifyOtp">Xác Minh 2FA</button>
+            </div>
+            <div class="otp-status-line" id="otpStatusText">
+              <span>Trạng thái 2FA: <strong class="gold">Chưa xác minh</strong> (Nút Kích hoạt Live Bridge bị khóa cho tới khi xác thực OTP)</span>
+            </div>
+          </div>
+
+          <div class="modal-tabs" id="apiModalTabs">
+            <button class="mtab active" data-mtab="hyperliquid">Hyperliquid DEX</button>
+            <button class="mtab" data-mtab="cex">CEX API (Binance / Bybit / OKX / Deribit)</button>
+          </div>
+
+          <div class="modal-body">
+            <div class="mtab-pane active" id="mtabHyperliquid">
+              <div class="form-row-2">
+                <div class="field">
+                  <label>MẠNG HYPERLIQUID</label>
+                  <select id="hlNetwork">
+                    <option value="TESTNET" selected>Arbitrum / Hyperliquid Testnet (Khuyên dùng)</option>
+                    <option value="MAINNET">Hyperliquid Mainnet (Tiền thật)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>VAULT / SUBACCOUNT (TÙY CHỌN)</label>
+                  <input type="text" id="hlVault" placeholder="0x... (bỏ trống nếu dùng ví chính)" />
+                </div>
+              </div>
+              <div class="field">
+                <label>ĐỊA CHỈ VÍ CHÍNH (MAIN WALLET ADDRESS)</label>
+                <input type="text" id="hlAddress" placeholder="0x71C... (chỉ đọc số dư &amp; vị thế)" />
+              </div>
+              <div class="field">
+                <label>API AGENT PRIVATE KEY (CHỈ QUYỀN ĐẶT LỆNH, KHÔNG RÚT TIỀN)</label>
+                <input type="password" id="hlAgentKey" placeholder="0x... (lưu tạm trong RAM phiên làm việc)" autocomplete="off" />
+              </div>
+              <div class="modal-status-box" id="hlConnStatus">
+                Trạng thái: <span class="muted">Chưa kết nối — Đang chạy chế độ Demo USDC</span>
+              </div>
+            </div>
+
+            <div class="mtab-pane" id="mtabCex">
+              <div class="form-row-3">
+                <div class="field">
+                  <label>CHỌN SÀN CEX</label>
+                  <select id="cexExchange">
+                    <option value="BINANCE">Binance Futures</option>
+                    <option value="BYBIT">Bybit V5 Linear</option>
+                    <option value="OKX">OKX Perpetual Swap</option>
+                    <option value="DERIBIT">Deribit Perpetual &amp; Options</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>MẠNG CEX</label>
+                  <select id="cexNetwork">
+                    <option value="TESTNET" selected>Testnet (An toàn - Khuyên dùng)</option>
+                    <option value="MAINNET">Mainnet (Tiền thật)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>QUYỀN TRUY CẬP</label>
+                  <select id="cexPerm">
+                    <option value="READ_ONLY">Read-Only (Xem số dư &amp; vị thế)</option>
+                    <option value="TRADE_NO_WITHDRAW">Trade Only (Cấm rút tiền)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="field">
+                  <label>API KEY</label>
+                  <input type="text" id="cexApiKey" placeholder="Nhập API Key..." autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label>API SECRET</label>
+                  <input type="password" id="cexApiSecret" placeholder="Nhập API Secret..." autocomplete="off" />
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="field">
+                  <label>PASSPHRASE (BẮT BUỘC VỚI OKX)</label>
+                  <input type="password" id="cexPassphrase" placeholder="Nhập Passphrase OKX..." autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label>LOCAL SIGNER SERVER</label>
+                  <input type="text" id="cexProxy" value="http://127.0.0.1:8787" placeholder="http://127.0.0.1:8787" />
+                </div>
+              </div>
+              <div class="modal-status-box" id="cexConnStatus">
+                Trạng thái: <span class="muted">Chưa cấu hình API Key</span>
+              </div>
+            </div>
+
+            <div class="live-exec-box" id="liveExecConfigBox">
+              <div class="form-row-2">
+                <div class="field">
+                  <label>CHẾ ĐỘ THỰC THI KHI LIÊN KẾT</label>
+                  <select id="selLiveExecMode">
+                    <option value="SHADOW" selected>🛡 Chạy Bóng (Đọc số dư &amp; giá thật, chưa đẩy lệnh)</option>
+                    <option value="LIVE_EXEC">⚡ Đẩy Lệnh Thật Lên Sàn (Bot &amp; Tay)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>TRẦN SIZE TỐI ĐA MỖI LỆNH THẬT (USDC)</label>
+                  <input type="number" id="inpMaxLiveNotional" value="500" min="5" max="500000" step="10" />
+                </div>
+              </div>
+              <div class="live-exec-warn" id="liveExecWarnText">
+                🛡 Đang chọn chế độ Chạy Bóng an toàn: Thuật toán chạy theo vốn thật nhưng chưa gửi lệnh thật lên sàn.
+              </div>
+            </div>
+
+            <div class="modal-status-box live-bal-box" id="liveFetchedBalanceBox">
+              <div class="lbb-left">
+                <span class="muted">SỐ DƯ THỰC TỪ SÀN:</span>
+                <strong class="cyan" id="liveFetchedBalanceVal">Chưa truy vấn — bấm &quot;Kiểm Tra &amp; Lấy Số Dư&quot;</strong>
+              </div>
+              <button type="button" class="btn btn-xs btn-cyan-outline" id="btnFetchBalanceNow">🔄 Lấy Số Dư Thực</button>
+            </div>
+
+            <label class="sec-confirm-check">
+              <input type="checkbox" id="chkSecurityAck" />
+              <span>Tôi xác nhận API Key / Agent Wallet không có quyền rút tiền và hiểu rõ rủi ro giao dịch đòn bẩy.</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Bottom 100% Asset Protection Notice -->
+        <div class="hub-asset-shield">
+          <div class="hub-shield-hdr">🛡 Bảo Mật Tài Sản Tuyệt Đối 100%:</div>
           <ul>
-            <li><strong>Tuyệt đối KHÔNG cấp quyền Rút tiền (Withdraw)</strong> cho bất kỳ API Key CEX nào. Luôn bật <strong>IP Whitelist</strong>.</li>
-            <li>Với <strong>Hyperliquid DEX</strong>, chỉ nhập <strong>API Agent Wallet Key</strong> (không có quyền rút USDC khỏi ví chính) và test <strong>Testnet</strong> trước.</li>
-            <li>Khóa chỉ lưu trong <strong>RAM phiên</strong>; hệ thống áp dụng <strong>2FA OTP (HMAC-SHA256, 10 phút, tối đa 5 lần sai, 60s cooldown)</strong> &amp; thu hồi phiên trên mọi thiết bị.</li>
+            <li>Chỉ cần tích chọn quyền: <strong>&quot;Đọc dữ liệu&quot; (Reading)</strong> và <strong>&quot;Giao dịch Hợp đồng tương lai&quot; (Futures Trading)</strong>.</li>
+            <li><strong class="neg">KHÔNG BAO GIỜ bật quyền &quot;Rút tiền&quot; (Enable Withdrawals)</strong>. Bot sẽ tự động từ chối nếu phát hiện quyền rút tiền!</li>
+            <li>Mã hóa bảo mật HMAC SHA-256 nội bộ, tài sản 100% nằm an toàn trên sàn của bạn.</li>
           </ul>
-        </div>
-
-        <!-- Zero-Trust 2FA HMAC OTP Verification Gate -->
-        <div class="otp-gate-box" id="otpGateBox">
-          <div class="otp-gate-hdr">
-            <span>🛡 BƯỚC 1: XÁC THỰC 2FA (HMAC-SHA256 OTP + IP BINDING)</span>
-            <button type="button" class="btn btn-xs btn-danger-outline" id="btnRevokeSessions">Thu Hồi Mọi Phiên</button>
-          </div>
-          <div class="otp-row">
-            <input type="email" id="otpEmail" value="trader@quantum.io" placeholder="Gmail nhận OTP 6 số..." />
-            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnSendOtp">Gửi OTP</button>
-            <input type="text" id="inpOtpCode" maxlength="6" placeholder="Mã OTP 6 số" autocomplete="one-time-code" />
-            <button type="button" class="btn btn-xs btn-cyan" id="btnVerifyOtp">Xác Minh 2FA</button>
-          </div>
-          <div class="otp-status-line" id="otpStatusText">
-            <span>Trạng thái 2FA: <strong class="gold">Chưa xác minh</strong> (Nút Kích hoạt Live Bridge bị khóa cho tới khi xác thực OTP)</span>
-          </div>
-        </div>
-
-        <div class="modal-tabs" id="apiModalTabs">
-          <button class="mtab active" data-mtab="hyperliquid">Hyperliquid DEX</button>
-          <button class="mtab" data-mtab="cex">CEX API (Binance / Bybit / OKX / Deribit)</button>
-        </div>
-
-        <div class="modal-body">
-          <div class="mtab-pane active" id="mtabHyperliquid">
-            <div class="form-row-2">
-              <div class="field">
-                <label>MẠNG HYPERLIQUID</label>
-                <select id="hlNetwork">
-                  <option value="TESTNET" selected>Arbitrum / Hyperliquid Testnet (Khuyên dùng)</option>
-                  <option value="MAINNET">Hyperliquid Mainnet (Tiền thật)</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>VAULT / SUBACCOUNT (TÙY CHỌN)</label>
-                <input type="text" id="hlVault" placeholder="0x... (bỏ trống nếu dùng ví chính)" />
-              </div>
-            </div>
-            <div class="field">
-              <label>ĐỊA CHỈ VÍ CHÍNH (MAIN WALLET ADDRESS)</label>
-              <input type="text" id="hlAddress" placeholder="0x71C... (chỉ đọc số dư &amp; vị thế)" />
-            </div>
-            <div class="field">
-              <label>API AGENT PRIVATE KEY (CHỈ QUYỀN ĐẶT LỆNH, KHÔNG RÚT TIỀN)</label>
-              <input type="password" id="hlAgentKey" placeholder="0x... (lưu tạm trong RAM phiên làm việc)" autocomplete="off" />
-            </div>
-            <div class="modal-status-box" id="hlConnStatus">
-              Trạng thái: <span class="muted">Chưa kết nối — Đang chạy chế độ Demo $100,000 USDC</span>
-            </div>
-          </div>
-
-          <div class="mtab-pane" id="mtabCex">
-            <div class="form-row-3">
-              <div class="field">
-                <label>CHỌN SÀN CEX</label>
-                <select id="cexExchange">
-                  <option value="BINANCE">Binance Futures</option>
-                  <option value="BYBIT">Bybit V5 Linear</option>
-                  <option value="OKX">OKX Perpetual Swap</option>
-                  <option value="DERIBIT">Deribit Perpetual &amp; Options</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>MẠNG CEX</label>
-                <select id="cexNetwork">
-                  <option value="TESTNET" selected>Testnet (An toàn - Khuyên dùng)</option>
-                  <option value="MAINNET">Mainnet (Tiền thật)</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>QUYỀN TRUY CẬP</label>
-                <select id="cexPerm">
-                  <option value="READ_ONLY">Read-Only (Xem số dư &amp; vị thế)</option>
-                  <option value="TRADE_NO_WITHDRAW">Trade Only (Cấm rút tiền)</option>
-                </select>
-              </div>
-            </div>
-            <div class="form-row-2">
-              <div class="field">
-                <label>API KEY</label>
-                <input type="text" id="cexApiKey" placeholder="Nhập API Key..." autocomplete="off" />
-              </div>
-              <div class="field">
-                <label>API SECRET</label>
-                <input type="password" id="cexApiSecret" placeholder="Nhập API Secret..." autocomplete="off" />
-              </div>
-            </div>
-            <div class="form-row-2">
-              <div class="field">
-                <label>PASSPHRASE (BẮT BUỘC VỚI OKX)</label>
-                <input type="password" id="cexPassphrase" placeholder="Nhập Passphrase OKX..." autocomplete="off" />
-              </div>
-              <div class="field">
-                <label>LOCAL SIGNER SERVER</label>
-                <input type="text" id="cexProxy" value="http://127.0.0.1:8787" placeholder="http://127.0.0.1:8787" />
-              </div>
-            </div>
-            <div class="modal-status-box" id="cexConnStatus">
-              Trạng thái: <span class="muted">Chưa cấu hình API Key</span>
-            </div>
-          </div>
-
-          <div class="live-exec-box" id="liveExecConfigBox">
-            <div class="form-row-2">
-              <div class="field">
-                <label>CHẾ ĐỘ THỰC THI KHI LIÊN KẾT</label>
-                <select id="selLiveExecMode">
-                  <option value="SHADOW" selected>🛡 Chạy Bóng (Đọc số dư &amp; giá thật, chưa đẩy lệnh)</option>
-                  <option value="LIVE_EXEC">⚡ Đẩy Lệnh Thật Lên Sàn (Bot &amp; Tay)</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>TRẦN SIZE TỐI ĐA MỖI LỆNH THẬT (USDC)</label>
-                <input type="number" id="inpMaxLiveNotional" value="500" min="5" max="500000" step="10" />
-              </div>
-            </div>
-            <div class="live-exec-warn" id="liveExecWarnText">
-              🛡 Đang chọn chế độ Chạy Bóng an toàn: Thuật toán chạy theo vốn thật nhưng chưa gửi lệnh thật lên sàn.
-            </div>
-          </div>
-
-          <div class="modal-status-box live-bal-box" id="liveFetchedBalanceBox">
-            <div class="lbb-left">
-              <span class="muted">SỐ DƯ THỰC TỪ SÀN:</span>
-              <strong class="cyan" id="liveFetchedBalanceVal">Chưa truy vấn — bấm &quot;Kiểm Tra &amp; Lấy Số Dư&quot;</strong>
-            </div>
-            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnFetchBalanceNow">🔄 Lấy Số Dư Thực</button>
-          </div>
-
-          <label class="sec-confirm-check">
-            <input type="checkbox" id="chkSecurityAck" />
-            <span>Tôi xác nhận API Key / Agent Wallet không có quyền rút tiền và hiểu rõ rủi ro giao dịch đòn bẩy.</span>
-          </label>
         </div>
       </div>
 
@@ -896,6 +1058,58 @@
           <button class="btn btn-cyan-outline" id="btnTestConn">Kiểm Tra &amp; Lấy Số Dư Thực</button>
           <button class="btn btn-cyan" id="btnSaveLiveConn" disabled>Lưu &amp; Kích Hoạt Live Bridge</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ACCOUNT, 3-DEVICE & ADMIN LIVE-KEY MODAL ==================== -->
+  <div class="modal-backdrop hidden" id="accountModal" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+    <div class="modal-card account-modal-card">
+      <div class="modal-hdr">
+        <div>
+          <h2 id="accountModalTitle">👤 QUẢN LÝ TÀI KHOẢN &amp; 3 THIẾT BỊ</h2>
+          <p class="modal-sub" id="accModalSub">Xác thực Gmail thật • Bảo vệ tối đa 3 thiết bị</p>
+        </div>
+        <button type="button" class="modal-close" id="btnCloseAccountModal" aria-label="Đóng">✕</button>
+      </div>
+      <div class="modal-scroll-area modal-body">
+        <div class="acc-summary-box">
+          <div>
+            <div class="muted" style="font-size:9px;">GMAIL ĐÃ XÁC THỰC</div>
+            <strong class="cyan" id="accEmailDisplay">--</strong>
+          </div>
+          <span class="acc-tier-pill" id="accTierBadge">DEMO</span>
+        </div>
+
+        <div class="acc-section">
+          <div class="acc-sec-hdr">
+            <span>📱 THIẾT BỊ ĐÃ KÍCH HOẠT (<strong id="accountDeviceCount">0/3</strong>)</span>
+          </div>
+          <div class="acc-devices-list" id="accountDevicesList"></div>
+        </div>
+
+        <!-- Admin Live Activation Key Generator (Only visible to traicaysaigonhanoi123@gmail.com) -->
+        <div class="admin-key-panel hidden" id="adminKeyPanel">
+          <div class="acc-sec-hdr">
+            <span class="gold">👑 ADMIN MASTER — CẤP MÃ KÍCH HOẠT LIVE (LIVE-XXXX-XXXX-XXXX)</span>
+          </div>
+          <div class="adm-issue-row">
+            <input type="email" id="admKeyTargetEmail" placeholder="Gmail nhận mã (để trống = dùng chung 1 lần)" />
+            <button type="button" class="btn btn-xs auth-cta-btn" id="btnAdminIssueKey">🔑 Tạo Mã LIVE</button>
+          </div>
+          <div class="adm-generated-box hidden" id="admGeneratedKeyBox">
+            <div>
+              <span class="muted" style="font-size:9px;">MÃ KÍCH HOẠT MỚI (CHỈ DÙNG 1 LẦN):</span>
+              <strong class="mint" id="admGeneratedKeyVal">LIVE-XXXX-XXXX-XXXX</strong>
+            </div>
+            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnCopyAdminKey">📋 Copy Mã</button>
+          </div>
+          <div class="adm-keys-list" id="admKeysList"></div>
+        </div>
+      </div>
+      <div class="modal-ftr">
+        <button type="button" class="btn btn-cyan-outline" id="btnOpenHubFromAccount">🌐 Trung Tâm Đa Sàn</button>
+        <button type="button" class="btn btn-danger-outline" id="btnLogoutAccount">🚪 Đăng xuất thiết bị này</button>
       </div>
     </div>
   </div>
@@ -1034,6 +1248,7 @@
   <script defer src="src/core/uuid.js"></script>
   <script defer src="src/core/schemas.js"></script>
   <script defer src="src/core/securityGate.js"></script>
+  <script defer src="src/core/accountAuth.js"></script>
 
   <!-- Domain Engines (UMD) -->
   <script defer src="src/engines/marketEngine.js"></script>

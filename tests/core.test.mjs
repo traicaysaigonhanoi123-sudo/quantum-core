@@ -15,6 +15,7 @@ const require = createRequire(import.meta.url);
 const QuantumUUID = require('../src/core/uuid.js');
 const QuantumSchemas = require('../src/core/schemas.js');
 const QuantumSecurityGate = require('../src/core/securityGate.js');
+const QuantumAccountAuth = require('../src/core/accountAuth.js');
 const QuantumMarketEngine = require('../src/engines/marketEngine.js');
 const QuantumTradingEngine = require('../src/engines/tradingEngine.js');
 
@@ -1281,4 +1282,165 @@ test('State persistence restores active Auto-Bot/positions and live entry confir
   assert.equal(trading2.riskMode, 'AGGRESSIVE');
   assert.equal(trading2.positions.length, 1);
   assert.equal(trading2.positions[0].symbol, 'SOL-PERP');
+});
+
+test('QuantumAccountAuth enforces Gmail OTP + CAPTCHA, 3-device max with Yes/No takeover kick, and Admin LIVE activation keys', async () => {
+  const auth = new QuantumAccountAuth({ hmacSecret: 'test-auth-secret-key' });
+
+  // 1. Strict @gmail.com + Math CAPTCHA verification
+  const capBad = auth.createMathCaptcha();
+  const nonGmail = await auth.requestRegisterOtp({ email: 'user@yahoo.com', captchaId: capBad.captchaId, captchaAnswer: 10 });
+  assert.equal(nonGmail.ok, false);
+  assert.equal(nonGmail.code, 'INVALID_GMAIL');
+
+  const cap1 = auth.createMathCaptcha();
+  const [aStr, op, bStr] = cap1.expression.replace(' = ?', '').split(' ');
+  const capAns1 = op === '+' ? Number(aStr) + Number(bStr) : Number(aStr) - Number(bStr);
+
+  // Admin Gmail (traicaysaigonhanoi123@gmail.com) gets ADMIN + liveActivated automatically on OTP registration
+  const admOtpRes = await auth.requestRegisterOtp({
+    email: 'traicaysaigonhanoi123@gmail.com',
+    captchaId: cap1.captchaId,
+    captchaAnswer: capAns1,
+    deviceId: 'dev_adm_pc',
+    deviceLabel: '💻 Máy tính Windows'
+  });
+  assert.equal(admOtpRes.ok, true);
+  assert.match(admOtpRes.devPreviewOtp, /^\d{6}$/);
+
+  const admReg = await auth.verifyRegisterAndActivate({
+    challengeId: admOtpRes.challengeId,
+    email: 'traicaysaigonhanoi123@gmail.com',
+    otp: admOtpRes.devPreviewOtp,
+    password: 'AdminAppPass!99',
+    deviceId: 'dev_adm_pc',
+    deviceLabel: '💻 Máy tính Windows'
+  });
+  assert.equal(admReg.ok, true);
+  assert.equal(admReg.user.role, 'ADMIN');
+  assert.equal(admReg.user.liveActivated, true);
+
+  // 2. Normal Gmail defaults to Demo only until Admin issues LIVE-XXXX-XXXX-XXXX key
+  const cap2 = auth.createMathCaptcha();
+  const [a2, op2, b2] = cap2.expression.replace(' = ?', '').split(' ');
+  const ans2 = op2 === '+' ? Number(a2) + Number(b2) : Number(a2) - Number(b2);
+  const demoOtp = await auth.requestRegisterOtp({
+    email: 'trader.demo@gmail.com',
+    captchaId: cap2.captchaId,
+    captchaAnswer: ans2,
+    deviceId: 'dev_phone_1',
+    deviceLabel: '📱 Điện thoại Android'
+  });
+  assert.equal(demoOtp.ok, true);
+
+  const demoReg = await auth.verifyRegisterAndActivate({
+    challengeId: demoOtp.challengeId,
+    email: 'trader.demo@gmail.com',
+    otp: demoOtp.devPreviewOtp,
+    password: 'DemoPass123!',
+    deviceId: 'dev_phone_1',
+    deviceLabel: '📱 Điện thoại Android'
+  });
+  assert.equal(demoReg.ok, true);
+  assert.equal(demoReg.user.role, 'USER');
+  assert.equal(demoReg.user.liveActivated, false);
+
+  // Non-admin cannot issue LIVE keys
+  const nonAdmIssue = await auth.issueLiveActivationKey({
+    adminEmail: 'trader.demo@gmail.com',
+    adminSessionToken: demoReg.sessionToken,
+    adminDeviceId: 'dev_phone_1'
+  });
+  assert.equal(nonAdmIssue.ok, false);
+
+  // Admin issues a LIVE key bound to trader.demo@gmail.com
+  const issued = await auth.issueLiveActivationKey({
+    adminEmail: 'traicaysaigonhanoi123@gmail.com',
+    adminSessionToken: admReg.sessionToken,
+    adminDeviceId: 'dev_adm_pc',
+    targetEmail: 'trader.demo@gmail.com'
+  });
+  assert.equal(issued.ok, true);
+  assert.match(issued.activationKey, /^LIVE-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+
+  const unlocked = await auth.activateLiveKey({
+    email: 'trader.demo@gmail.com',
+    sessionToken: demoReg.sessionToken,
+    deviceId: 'dev_phone_1',
+    activationKey: issued.activationKey
+  });
+  assert.equal(unlocked.ok, true);
+  assert.equal(unlocked.user.liveActivated, true);
+
+  // Key is single-use (replay must fail)
+  const replay = await auth.activateLiveKey({
+    email: 'trader.demo@gmail.com',
+    sessionToken: demoReg.sessionToken,
+    deviceId: 'dev_phone_1',
+    activationKey: issued.activationKey
+  });
+  assert.equal(replay.ok, false);
+  assert.equal(replay.code, 'KEY_ALREADY_USED');
+
+  // 3. Active-device conflict requires Yes/No confirmation, kicks old device, and enforces max 3 devices
+  const conflictRes = await auth.login({
+    email: 'trader.demo@gmail.com',
+    password: 'DemoPass123!',
+    deviceId: 'dev_phone_2',
+    deviceLabel: '📱 iPhone iOS',
+    forceTakeover: false
+  });
+  assert.equal(conflictRes.ok, false);
+  assert.equal(conflictRes.code, 'ACTIVE_SESSION_CONFLICT');
+  assert.equal(conflictRes.activeDevice.deviceId, 'dev_phone_1');
+
+  // Confirm YES (forceTakeover = true) -> dev_phone_2 enters, dev_phone_1 is kicked!
+  const takeover2 = await auth.login({
+    email: 'trader.demo@gmail.com',
+    password: 'DemoPass123!',
+    deviceId: 'dev_phone_2',
+    deviceLabel: '📱 iPhone iOS',
+    forceTakeover: true
+  });
+  assert.equal(takeover2.ok, true);
+
+  const oldPhoneCheck = await auth.validateSession({
+    email: 'trader.demo@gmail.com',
+    sessionToken: demoReg.sessionToken,
+    deviceId: 'dev_phone_1'
+  });
+  assert.equal(oldPhoneCheck.ok, false);
+  assert.equal(oldPhoneCheck.code, 'SESSION_KICKED');
+
+  // Add device 3 and device 4 -> registered devices list must remain capped at 3
+  const takeover3 = await auth.login({
+    email: 'trader.demo@gmail.com',
+    password: 'DemoPass123!',
+    deviceId: 'dev_pc_3',
+    deviceLabel: '💻 Máy tính Windows',
+    forceTakeover: true
+  });
+  assert.equal(takeover3.ok, true);
+  assert.equal(takeover3.user.deviceCount, 3);
+
+  const takeover4 = await auth.login({
+    email: 'trader.demo@gmail.com',
+    password: 'DemoPass123!',
+    deviceId: 'dev_tab_4',
+    deviceLabel: '📱 iPad',
+    forceTakeover: true
+  });
+  assert.equal(takeover4.ok, true);
+  assert.equal(takeover4.user.deviceCount, 3);
+
+  // Export/Import DB round-trip preserves accounts and live keys
+  const authClone = new QuantumAccountAuth({ hmacSecret: 'test-auth-secret-key' });
+  authClone.importDb(auth.exportDb());
+  const cloneCheck = await authClone.validateSession({
+    email: 'trader.demo@gmail.com',
+    sessionToken: takeover4.sessionToken,
+    deviceId: 'dev_tab_4'
+  });
+  assert.equal(cloneCheck.ok, true);
+  assert.equal(cloneCheck.user.liveActivated, true);
 });
