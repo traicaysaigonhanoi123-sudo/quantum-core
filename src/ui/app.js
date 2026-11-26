@@ -580,6 +580,7 @@
         .map((p) => {
           const pnlCls = p.unrealizedPnl >= 0 ? 'pos' : 'neg';
           const sign = p.unrealizedPnl >= 0 ? '+' : '';
+          const isViewing = p.symbol === market.activeSymbol;
           const shieldBadge = p.trailingActive
             ? '<span class="be-tag">TRAIL 🔒</span>'
             : (p.beLocked ? '<span class="be-tag">SL=BE 🔒</span>' : (p.hedgeGroupId ? '<span class="arb-badge">HEDGE</span>' : ''));
@@ -587,18 +588,44 @@
             ? `<span class="cyan">Delta-Neutral</span> <span class="muted">(F: ${fmtSignedUsd(p.accruedFundingUsd || 0, 2)})</span>`
             : `<span class="neg">${market.formatPrice(p.slPrice, p.symbol)}</span> / <span class="pos">${market.formatPrice(p.tpPrice, p.symbol)}</span>`;
           return `
-            <tr>
-              <td><strong>${p.symbol}</strong> <span class="muted">${p.exchange.slice(0, 4)}</span>${shieldBadge}</td>
+            <tr class="clickable-row${isViewing ? ' viewing-chart' : ''}" data-view-symbol="${p.symbol}" data-view-exchange="${p.exchange}" title="Bấm để xem biểu đồ ${p.symbol}">
+              <td><span class="pos-sym-link"><span class="pos-chart-ico">📈</span><strong>${p.symbol}</strong> <span class="muted">${p.exchange.slice(0, 4)}</span>${shieldBadge}</span></td>
               <td class="${p.side === 'LONG' ? 'pos' : 'neg'}"><strong>${p.side} ${p.leverage}x</strong></td>
               <td>$${p.sizeUsd.toLocaleString()}</td>
               <td>${market.formatPrice(p.entryPrice, p.symbol)}</td>
               <td class="gold">${market.formatPrice(p.markPrice, p.symbol)}</td>
               <td>${slTpCell}</td>
               <td class="${pnlCls}"><strong>${fmtSignedUsd(p.unrealizedPnl, 2)}</strong> (${sign}${p.roePct.toFixed(1)}%)</td>
-              <td><button class="btn btn-xs btn-danger-outline" data-close-pos="${p.id}">Đóng</button></td>
+              <td class="pos-actions-cell">
+                <button type="button" class="btn btn-xs btn-cyan-outline" data-view-chart="${p.symbol}" data-view-exchange="${p.exchange}" title="Mở biểu đồ ${p.symbol}">Biểu đồ</button>
+                <button type="button" class="btn btn-xs btn-danger-outline" data-close-pos="${p.id}">Đóng</button>
+              </td>
             </tr>`;
         })
         .join('');
+    }
+
+    const openPosBar = $('chartOpenPosBar');
+    if (openPosBar) {
+      if (positions.length === 0) {
+        openPosBar.classList.add('hidden');
+        openPosBar.innerHTML = '';
+      } else {
+        openPosBar.classList.remove('hidden');
+        openPosBar.innerHTML = `<span class="cop-lbl">ĐANG CÓ LỆNH (${positions.length}):</span>` + positions
+          .map((p) => {
+            const isViewing = p.symbol === market.activeSymbol;
+            const pnlCls = p.unrealizedPnl >= 0 ? 'pos' : 'neg';
+            const sideTag = p.side === 'LONG' ? 'L' : 'S';
+            return `
+              <button type="button" class="cop-pill ${p.side === 'LONG' ? 'long' : 'short'}${isViewing ? ' active' : ''}" data-view-symbol="${p.symbol}" data-view-exchange="${p.exchange}" title="Xem biểu đồ ${p.symbol}">
+                <strong>${p.symbol.replace('-PERP', '')}</strong>
+                <span class="cop-side">${sideTag}${p.leverage}x</span>
+                <span class="${pnlCls}">${fmtSignedUsd(p.unrealizedPnl, 2)}</span>
+              </button>`;
+          })
+          .join('');
+      }
     }
 
     if (orders.length === 0) {
@@ -607,14 +634,14 @@
       $('tblOrders').innerHTML = orders
         .map(
           (o) => `
-          <tr>
-            <td><strong>${o.symbol}</strong> <span class="muted">${o.exchange.slice(0, 4)}</span></td>
+          <tr class="clickable-row${o.symbol === market.activeSymbol ? ' viewing-chart' : ''}" data-view-symbol="${o.symbol}" data-view-exchange="${o.exchange}" title="Bấm để xem biểu đồ ${o.symbol}">
+            <td><span class="pos-sym-link"><span class="pos-chart-ico">📈</span><strong>${o.symbol}</strong> <span class="muted">${o.exchange.slice(0, 4)}</span></span></td>
             <td class="${o.side === 'LONG' ? 'pos' : 'neg'}"><strong>${o.side} ${o.leverage}x</strong></td>
             <td>$${o.sizeUsd.toLocaleString()}</td>
             <td class="gold">${market.formatPrice(o.entryPrice, o.symbol)}</td>
             <td><span class="neg">${market.formatPrice(o.slPrice, o.symbol)}</span> / <span class="pos">${market.formatPrice(o.tpPrice, o.symbol)}</span></td>
             <td class="cyan">${o.source}</td>
-            <td><button class="btn btn-xs btn-ghost" data-cancel-ord="${o.id}">Hủy</button></td>
+            <td><button type="button" class="btn btn-xs btn-ghost" data-cancel-ord="${o.id}">Hủy</button></td>
           </tr>`
         )
         .join('');
@@ -631,14 +658,14 @@
             ? '<span class="cyan">ĐANG HEDGE</span>'
             : (o.actionable ? '<span class="pos">KHẢ DỤNG (+EV)</span>' : '<span class="muted">CHỜ SPREAD</span>');
           return `
-            <tr>
+            <tr class="clickable-row${o.symbol === market.activeSymbol ? ' viewing-chart' : ''}" data-view-symbol="${o.symbol}" data-view-exchange="ALL" title="Bấm để xem biểu đồ ${o.symbol}">
               <td><strong>${o.symbol}</strong></td>
               <td class="pos">${o.longVenue.slice(0, 5)} <span class="muted">${market.formatPrice(o.longPrice, o.symbol)}</span></td>
               <td class="neg">${o.shortVenue.slice(0, 5)} <span class="muted">${market.formatPrice(o.shortPrice, o.symbol)}</span></td>
               <td class="${o.basisBps >= 0 ? 'pos' : 'neg'}">${o.basisBps >= 0 ? '+' : ''}${o.basisBps.toFixed(2)} bps</td>
               <td class="${aprCls}"><strong>${o.netAprPct >= 0 ? '+' : ''}${o.netAprPct.toFixed(1)}%</strong></td>
               <td>${statusTxt}</td>
-              <td><button class="btn btn-xs ${hasPair ? 'btn-ghost' : 'btn-cyan-outline'}" data-exec-arb="${o.symbol}" ${hasPair ? 'disabled' : ''}>${hasPair ? 'Đang chạy' : 'Hedge 2x'}</button></td>
+              <td><button type="button" class="btn btn-xs ${hasPair ? 'btn-ghost' : 'btn-cyan-outline'}" data-exec-arb="${o.symbol}" ${hasPair ? 'disabled' : ''}>${hasPair ? 'Đang chạy' : 'Hedge 2x'}</button></td>
             </tr>`;
         })
         .join('');
@@ -654,9 +681,9 @@
           const fee = Number(h.feeUsd) || 0;
           const gross = Number.isFinite(Number(h.grossPnl)) ? Number(h.grossPnl) : (h.pnl + fee);
           return `
-            <tr>
+            <tr class="clickable-row${h.symbol === market.activeSymbol ? ' viewing-chart' : ''}" data-view-symbol="${h.symbol}" data-view-exchange="${h.exchange || 'ALL'}" title="Bấm để xem biểu đồ ${h.symbol}">
               <td class="muted">${h.time}</td>
-              <td><strong>${h.symbol}</strong> <span class="${h.side === 'LONG' ? 'pos' : 'neg'}">${h.side}</span></td>
+              <td><span class="pos-sym-link"><span class="pos-chart-ico">📈</span><strong>${h.symbol}</strong> <span class="${h.side === 'LONG' ? 'pos' : 'neg'}">${h.side}</span></span></td>
               <td>${market.formatPrice(h.entryPrice, h.symbol)} → ${market.formatPrice(h.exitPrice, h.symbol)}</td>
               <td class="gold">${h.reason}</td>
               <td class="muted" title="Lãi gộp (Gross): ${fmtSignedUsd(gross, 2)} | Phí 2 chiều + trượt giá: -$${fee.toFixed(2)}">-$${fee.toFixed(2)}</td>
@@ -785,7 +812,18 @@
     $('coinPickerModal').classList.add('hidden');
   }
 
-  function selectDynamicCoin(sym, targetVenue = coinPickerVenue) {
+  function switchMobileTab(tabKey) {
+    const validTabs = ['chart', 'bot', 'blotter', 'book'];
+    const targetTab = validTabs.includes(tabKey) ? tabKey : 'chart';
+    document.documentElement.dataset.mobileTab = targetTab;
+    document.querySelectorAll('#mobileBottomNav .mnav-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.mtab === targetTab);
+    });
+    if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
+    window.dispatchEvent(new Event('resize'));
+  }
+
+  function selectDynamicCoin(sym, targetVenue = coinPickerVenue, silent = false) {
     const st = typeof market.ensureInstrument === 'function' ? market.ensureInstrument(sym) : market.getSymbolState(sym);
     if (!st) return;
     if (targetVenue && targetVenue !== market.activeExchange && market.venueCatalog?.[targetVenue]) {
@@ -795,10 +833,36 @@
     selectSymbol(st.symbol);
     renderInstrumentButtons();
     closeCoinPickerModal();
+    if (!silent) {
+      showToast({
+        type: 'cyan',
+        title: `ĐÃ MỞ ${st.symbol}`,
+        msg: `Đang tải biểu đồ & sổ lệnh theo giá thực trên ${market.activeExchange === 'ALL' ? '5 SÀN' : market.activeExchange}.`
+      });
+    }
+  }
+
+  function focusSymbolChart(sym, exchange) {
+    if (!sym) return;
+    const targetVenue = market.activeExchange === 'ALL' ? 'ALL' : (exchange || market.activeExchange);
+    selectDynamicCoin(sym, targetVenue, true);
+    renderTradingPanels();
+    const isDesktopMode = document.documentElement.classList.contains('desktop-viewport-mode');
+    if (!isDesktopMode && window.innerWidth <= 1180) {
+      switchMobileTab('chart');
+    }
+    const chartPanel = document.querySelector('.chart-panel');
+    if (chartPanel && typeof chartPanel.scrollIntoView === 'function') {
+      chartPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    if (typeof candleRenderer.draw === 'function') candleRenderer.draw();
+    const openPos = trading.positions.find((p) => p.symbol === sym);
     showToast({
       type: 'cyan',
-      title: `ĐÃ MỞ ${st.symbol}`,
-      msg: `Đang tải biểu đồ & sổ lệnh theo giá thực trên ${market.activeExchange === 'ALL' ? '5 SÀN' : market.activeExchange}.`
+      title: `📈 BIỂU ĐỒ ${sym}`,
+      msg: openPos
+        ? `${openPos.side} ${openPos.leverage}x • Entry ${market.formatPrice(openPos.entryPrice, sym)} | SL ${market.formatPrice(openPos.slPrice, sym)} | TP ${market.formatPrice(openPos.tpPrice, sym)}`
+        : `Đang hiển thị nến live & dự đoán AI cho ${sym}.`
     });
   }
 
@@ -2091,24 +2155,53 @@
 
     // UUID string IDs (no parseInt!)
     $('tblPositions').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-close-pos]');
-      if (btn) trading.closePosition(btn.dataset.closePos, 'MANUAL CLOSE');
+      const closeBtn = e.target.closest('[data-close-pos]');
+      if (closeBtn) {
+        trading.closePosition(closeBtn.dataset.closePos, 'MANUAL CLOSE');
+        return;
+      }
+      const viewBtn = e.target.closest('[data-view-chart]');
+      const row = e.target.closest('tr[data-view-symbol]');
+      const target = viewBtn || row;
+      if (target) {
+        focusSymbolChart(target.dataset.viewChart || target.dataset.viewSymbol, target.dataset.viewExchange);
+      }
     });
     $('tblOrders').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-cancel-ord]');
-      if (btn) trading.cancelLimitOrder(btn.dataset.cancelOrd);
+      const cancelBtn = e.target.closest('[data-cancel-ord]');
+      if (cancelBtn) {
+        trading.cancelLimitOrder(cancelBtn.dataset.cancelOrd);
+        return;
+      }
+      const row = e.target.closest('tr[data-view-symbol]');
+      if (row) focusSymbolChart(row.dataset.viewSymbol, row.dataset.viewExchange);
     });
+    $('tblHistory').addEventListener('click', (e) => {
+      const row = e.target.closest('tr[data-view-symbol]');
+      if (row) focusSymbolChart(row.dataset.viewSymbol, row.dataset.viewExchange);
+    });
+    const openPosBarEl = $('chartOpenPosBar');
+    if (openPosBarEl) {
+      openPosBarEl.addEventListener('click', (e) => {
+        const pill = e.target.closest('[data-view-symbol]');
+        if (pill) focusSymbolChart(pill.dataset.viewSymbol, pill.dataset.viewExchange);
+      });
+    }
     const tblArb = $('tblArb');
     if (tblArb) {
       tblArb.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-exec-arb]');
-        if (!btn) return;
-        const sym = btn.dataset.execArb;
-        const opp = market.getArbitrageOpportunities().find((o) => o.symbol === sym);
-        if (opp) {
-          const ok = trading.executeDeltaNeutralArb(opp, 10000, 'ARB');
-          if (ok) sphereRenderer.triggerPulse('#34d399');
+        if (btn) {
+          const sym = btn.dataset.execArb;
+          const opp = market.getArbitrageOpportunities().find((o) => o.symbol === sym);
+          if (opp) {
+            const ok = trading.executeDeltaNeutralArb(opp, 10000, 'ARB');
+            if (ok) sphereRenderer.triggerPulse('#34d399');
+          }
+          return;
         }
+        const row = e.target.closest('tr[data-view-symbol]');
+        if (row) focusSymbolChart(row.dataset.viewSymbol, row.dataset.viewExchange);
       });
     }
     $('btnCloseAll').addEventListener('click', () => {
@@ -2119,17 +2212,6 @@
     $('btnToggleWs').addEventListener('click', () => {
       market.toggleLiveWebSocket(!market.wsEnabled);
     });
-
-    const switchMobileTab = (tabKey) => {
-      const validTabs = ['chart', 'bot', 'blotter', 'book'];
-      const targetTab = validTabs.includes(tabKey) ? tabKey : 'chart';
-      document.documentElement.dataset.mobileTab = targetTab;
-      document.querySelectorAll('#mobileBottomNav .mnav-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.dataset.mtab === targetTab);
-      });
-      if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
-      window.dispatchEvent(new Event('resize'));
-    };
 
     const applyMobileViewMode = (mode, notify = false) => {
       const meta = $('viewportMeta');

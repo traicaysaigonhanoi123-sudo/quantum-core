@@ -225,7 +225,7 @@
       });
 
       symPos.forEach((p) => {
-        const pnlStr = `${p.unrealizedPnl >= 0 ? '+' : ''}$${p.unrealizedPnl.toFixed(0)}`;
+        const pnlStr = `${p.unrealizedPnl >= 0 ? '+' : '-'}$${Math.abs(p.unrealizedPnl).toFixed(2)}`;
         const col = p.side === 'LONG' ? '#00f0ff' : '#fb7185';
         this._drawPriceLine(ctx, w, h, p.entryPrice, col, `POS ${p.side} ${pnlStr}`, []);
         if (p.slPrice) this._drawPriceLine(ctx, w, h, p.slPrice, '#ff3b6b', `SL ${this.market.formatPrice(p.slPrice, st.symbol)}`, [4, 3]);

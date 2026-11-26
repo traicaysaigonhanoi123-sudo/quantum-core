@@ -1471,6 +1471,58 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   white-space: nowrap;
 }
 .quant-table tr:hover td { background: rgba(0, 240, 255, 0.04); }
+.quant-table tr.clickable-row { cursor: pointer; transition: background 0.14s ease; }
+.quant-table tr.clickable-row:hover td { background: rgba(0, 240, 255, 0.09); }
+.quant-table tr.clickable-row.viewing-chart td { background: rgba(0, 240, 255, 0.12); }
+.quant-table tr.clickable-row.viewing-chart td:first-child { box-shadow: inset 3px 0 0 var(--cyan); }
+.pos-sym-link { display: inline-flex; align-items: center; gap: 4px; }
+.pos-chart-ico { font-size: 10px; opacity: 0.78; }
+.pos-actions-cell { display: flex; align-items: center; gap: 4px; }
+.chart-open-pos-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: rgba(6, 12, 22, 0.85);
+  border-bottom: 1px solid var(--border-dim);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
+}
+.chart-open-pos-bar.hidden { display: none; }
+.cop-lbl {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cop-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-dim);
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.cop-pill:hover { border-color: rgba(0, 240, 255, 0.45); background: rgba(0, 240, 255, 0.08); }
+.cop-pill.active {
+  border-color: var(--cyan);
+  background: rgba(0, 240, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.25);
+}
+.cop-pill.long .cop-side { color: var(--mint); font-weight: 700; }
+.cop-pill.short .cop-side { color: var(--red); font-weight: 700; }
 .empty-row td { text-align: center; color: var(--text-muted); padding: 18px !important; }
 
 .log-feed {
