@@ -1576,6 +1576,44 @@
       market.toggleLiveWebSocket(!market.wsEnabled);
     });
 
+    const applyMobileViewMode = (mode, notify = false) => {
+      const meta = $('viewportMeta');
+      const btnView = $('btnToggleViewMode');
+      const isDesktopMode = mode !== 'MOBILE';
+      if (meta) {
+        meta.setAttribute('content', isDesktopMode
+          ? 'width=1366, user-scalable=yes'
+          : 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes');
+      }
+      document.documentElement.classList.toggle('desktop-viewport-mode', isDesktopMode);
+      document.documentElement.classList.toggle('mobile-viewport-mode', !isDesktopMode);
+      try { localStorage.setItem('qc_view_mode', isDesktopMode ? 'DESKTOP' : 'MOBILE'); } catch (_) {}
+      if (btnView) {
+        btnView.textContent = isDesktopMode ? '📱 ĐT' : '🖥 PC';
+        btnView.title = isDesktopMode ? 'Chuyển sang giao diện Điện thoại' : 'Chuyển sang giao diện Máy tính (PC 3 cột)';
+      }
+      window.dispatchEvent(new Event('resize'));
+      if (notify) {
+        showToast({
+          type: 'cyan',
+          title: isDesktopMode ? '🖥 GIAO DIỆN MÁY TÍNH (PC 3 CỘT)' : '📱 GIAO DIỆN ĐIỆN THOẠI',
+          msg: isDesktopMode
+            ? 'Đã bật bố cục đầy đủ 1366px giống PC (xoay ngang đt hoặc zoom 2 ngón cực nét).'
+            : 'Đã chuyển về bố cục cuộn dọc tối ưu cho màn hình điện thoại.'
+        });
+      }
+    };
+
+    const viewBtn = $('btnToggleViewMode');
+    if (viewBtn) {
+      const initIsDesktop = document.documentElement.classList.contains('desktop-viewport-mode');
+      viewBtn.textContent = initIsDesktop ? '📱 ĐT' : '🖥 PC';
+      viewBtn.addEventListener('click', () => {
+        const curDesktop = document.documentElement.classList.contains('desktop-viewport-mode');
+        applyMobileViewMode(curDesktop ? 'MOBILE' : 'DESKTOP', true);
+      });
+    }
+
     $('btnModeDemo').addEventListener('click', () => {
       if (liveSyncTimer) {
         clearInterval(liveSyncTimer);

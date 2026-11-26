@@ -83,6 +83,23 @@ select:focus-visible {
   transform: scale(0.98);
 }
 
+.btn,
+.inst-btn,
+.ex-pill,
+.side-btn,
+.btab,
+.tf-btn,
+.mode-btn,
+.mtab,
+.cap-btn,
+.rmode-btn {
+  touch-action: manipulation;
+}
+
+.view-mode-btn { display: none; }
+html.desktop-viewport-mode .view-mode-btn,
+html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
+
 /* Subtle tactical grid backdrop (flat lines, no multi-color radial washes) */
 .bg-grid-overlay {
   position: fixed;
@@ -2017,24 +2034,78 @@ select:focus-visible {
   }
 }
 
+/* ==================== DESKTOP-ON-MOBILE VIEWPORT MODE ==================== */
+html.desktop-viewport-mode,
+html.desktop-viewport-mode body {
+  min-width: 1366px;
+  overflow-x: auto;
+  -webkit-text-size-adjust: 100%;
+}
+html.desktop-viewport-mode .hud-topbar {
+  min-width: 1366px;
+  height: 40px;
+  flex-wrap: nowrap;
+  padding: 0 12px;
+}
+html.desktop-viewport-mode .exchange-strip {
+  min-width: 1366px;
+}
+html.desktop-viewport-mode .terminal-grid {
+  min-width: 1366px;
+  grid-template-columns: 284px minmax(0, 1fr) 268px;
+  height: clamp(720px, calc(100vh - 68px), 880px);
+}
+html.desktop-viewport-mode .center-top-row {
+  grid-template-columns: 1.55fr 1fr;
+}
+html.desktop-viewport-mode .center-bottom-row {
+  grid-template-columns: 1.48fr 1fr;
+}
+html.desktop-viewport-mode .venue-cards-stack {
+  width: 242px;
+}
+html.desktop-viewport-mode .modal-card {
+  max-height: 820px;
+}
+
 /* ==================== RESPONSIVE FALLBACK ==================== */
 @media (max-width: 1480px) {
-  .panel-sub-note, .chart-hint, .brand-sub { display: none; }
-  .inst-btn { padding: 4px 6px; font-size: 10px; gap: 4px; }
-  .strip-telemetry { gap: 8px; }
+  html:not(.desktop-viewport-mode) .panel-sub-note,
+  html:not(.desktop-viewport-mode) .chart-hint,
+  html:not(.desktop-viewport-mode) .brand-sub { display: none; }
+  html:not(.desktop-viewport-mode) .inst-btn { padding: 4px 6px; font-size: 10px; gap: 4px; }
+  html:not(.desktop-viewport-mode) .strip-telemetry { gap: 8px; }
 }
 @media (max-width: 1280px) {
-  .terminal-grid { grid-template-columns: 268px minmax(0, 1fr) 244px; }
-  .venue-cards-stack { width: 206px; }
+  html:not(.desktop-viewport-mode) .terminal-grid { grid-template-columns: 268px minmax(0, 1fr) 244px; }
+  html:not(.desktop-viewport-mode) .venue-cards-stack { width: 206px; }
 }
 @media (max-width: 1024px) {
-  .hud-topbar { height: auto; flex-wrap: wrap; padding: 6px 12px; }
-  .terminal-grid {
+  html:not(.desktop-viewport-mode) .hud-topbar { height: auto; flex-wrap: wrap; padding: 6px 10px; gap: 6px; }
+  html:not(.desktop-viewport-mode) .topbar-right {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  html:not(.desktop-viewport-mode) .topbar-right::-webkit-scrollbar { display: none; }
+  html:not(.desktop-viewport-mode) .exchange-strip {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  html:not(.desktop-viewport-mode) .exchange-strip::-webkit-scrollbar { display: none; }
+  html:not(.desktop-viewport-mode) .terminal-grid {
     grid-template-columns: 1fr;
     height: auto;
   }
-  .center-top-row, .center-bottom-row { grid-template-columns: 1fr; height: auto; min-height: 240px; }
-  .chart-panel, .radar-panel, .blotter-panel, .flow-chart-panel { min-height: 220px; }
-  .sphere-hero-panel { min-height: 340px; }
-  .otp-row { grid-template-columns: 1fr; }
+  html:not(.desktop-viewport-mode) .center-top-row,
+  html:not(.desktop-viewport-mode) .center-bottom-row { grid-template-columns: 1fr; height: auto; min-height: 240px; }
+  html:not(.desktop-viewport-mode) .chart-panel,
+  html:not(.desktop-viewport-mode) .blotter-panel,
+  html:not(.desktop-viewport-mode) .flow-chart-panel { min-height: 235px; }
+  html:not(.desktop-viewport-mode) .radar-panel { min-height: 270px; }
+  html:not(.desktop-viewport-mode) .sphere-hero-panel { min-height: 360px; }
+  html:not(.desktop-viewport-mode) .modal-card { max-height: calc(100dvh - 16px); }
+  html:not(.desktop-viewport-mode) .otp-row { grid-template-columns: 1fr; }
 }

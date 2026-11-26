@@ -450,6 +450,47 @@
           this.triggerPulse('#fbbf24');
         }
       });
+
+      this.canvas.addEventListener('touchstart', (e) => {
+        if (!e.touches || e.touches.length !== 1) {
+          this.dragging = false;
+          return;
+        }
+        const touch = e.touches[0];
+        this.dragging = true;
+        this.lastX = touch.clientX;
+        this.lastY = touch.clientY;
+        this._downX = touch.clientX;
+        this._downY = touch.clientY;
+      }, { passive: true });
+
+      this.canvas.addEventListener('touchmove', (e) => {
+        if (!this.dragging || !e.touches || e.touches.length !== 1) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        const dx = touch.clientX - this.lastX;
+        const dy = touch.clientY - this.lastY;
+        this.rotY += dx * 0.008;
+        this.rotX = Math.max(-1.1, Math.min(1.1, this.rotX + dy * 0.008));
+        this.lastX = touch.clientX;
+        this.lastY = touch.clientY;
+      }, { passive: false });
+
+      this.canvas.addEventListener('touchend', (e) => {
+        const wasDragging = this.dragging;
+        this.dragging = false;
+        if (!wasDragging || !this._bagHitbox || !e.changedTouches || !e.changedTouches.length) return;
+        const touch = e.changedTouches[0];
+        if (Math.hypot(touch.clientX - this._downX, touch.clientY - this._downY) > 8) return;
+        const rect = this.canvas.getBoundingClientRect();
+        const lx = touch.clientX - rect.left;
+        const ly = touch.clientY - rect.top;
+        const hb = this._bagHitbox;
+        if (Math.hypot(lx - hb.x, ly - hb.y) <= hb.r * 1.25) {
+          this.triggerCoinBurst(5, null);
+          this.triggerPulse('#fbbf24');
+        }
+      }, { passive: true });
     }
 
     triggerPulse(color = '#00f0ff') {
