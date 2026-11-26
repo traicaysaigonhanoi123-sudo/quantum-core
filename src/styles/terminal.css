@@ -100,6 +100,11 @@ select:focus-visible {
 html.desktop-viewport-mode .view-mode-btn,
 html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 
+.mobile-mini-kpi,
+.mobile-bottom-nav {
+  display: none;
+}
+
 /* Subtle tactical grid backdrop (flat lines, no multi-color radial washes) */
 .bg-grid-overlay {
   position: fixed;
@@ -2081,31 +2086,263 @@ html.desktop-viewport-mode .modal-card {
   html:not(.desktop-viewport-mode) .venue-cards-stack { width: 206px; }
 }
 @media (max-width: 1024px) {
-  html:not(.desktop-viewport-mode) .hud-topbar { height: auto; flex-wrap: wrap; padding: 6px 10px; gap: 6px; }
+  html:not(.desktop-viewport-mode) body {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+  }
+  html:not(.desktop-viewport-mode) .hud-topbar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 7px 10px;
+    gap: 6px;
+  }
+  html:not(.desktop-viewport-mode) .topbar-brand {
+    flex: 1 1 auto;
+  }
+  html:not(.desktop-viewport-mode) .brand-meta,
+  html:not(.desktop-viewport-mode) #btnCmdPalette,
+  html:not(.desktop-viewport-mode) .hud-clock {
+    display: none;
+  }
+  html:not(.desktop-viewport-mode) .topbar-instruments {
+    order: 3;
+    width: 100%;
+    padding-top: 2px;
+  }
   html:not(.desktop-viewport-mode) .topbar-right {
+    order: 2;
     width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     padding-bottom: 2px;
+    gap: 5px;
   }
-  html:not(.desktop-viewport-mode) .topbar-right::-webkit-scrollbar { display: none; }
+  html:not(.desktop-viewport-mode) .topbar-right::-webkit-scrollbar,
+  html:not(.desktop-viewport-mode) .exchange-strip::-webkit-scrollbar {
+    display: none;
+  }
   html:not(.desktop-viewport-mode) .exchange-strip {
+    height: auto;
+    min-height: 34px;
+    padding: 5px 10px;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
-  html:not(.desktop-viewport-mode) .exchange-strip::-webkit-scrollbar { display: none; }
+  html:not(.desktop-viewport-mode) .mobile-mini-kpi {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 8px 8px 0;
+    padding: 8px 12px;
+    background: #0d111a;
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius);
+    box-shadow: var(--cnc-dark);
+    cursor: pointer;
+    z-index: 12;
+  }
+  html:not(.desktop-viewport-mode) .mmk-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-family: var(--font-mono);
+  }
+  html:not(.desktop-viewport-mode) .mmk-lbl {
+    font-size: 8.5px;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+  }
+  html:not(.desktop-viewport-mode) .mmk-val {
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
   html:not(.desktop-viewport-mode) .terminal-grid {
     grid-template-columns: 1fr;
     height: auto;
+    padding: 8px;
+    gap: 8px;
+  }
+  html:not(.desktop-viewport-mode) .col-left,
+  html:not(.desktop-viewport-mode) .col-center,
+  html:not(.desktop-viewport-mode) .col-right {
+    height: auto;
   }
   html:not(.desktop-viewport-mode) .center-top-row,
-  html:not(.desktop-viewport-mode) .center-bottom-row { grid-template-columns: 1fr; height: auto; min-height: 240px; }
-  html:not(.desktop-viewport-mode) .chart-panel,
-  html:not(.desktop-viewport-mode) .blotter-panel,
-  html:not(.desktop-viewport-mode) .flow-chart-panel { min-height: 235px; }
-  html:not(.desktop-viewport-mode) .radar-panel { min-height: 270px; }
-  html:not(.desktop-viewport-mode) .sphere-hero-panel { min-height: 360px; }
+  html:not(.desktop-viewport-mode) .center-bottom-row {
+    grid-template-columns: 1fr;
+    height: auto;
+    flex: none;
+  }
+  html:not(.desktop-viewport-mode) .chart-panel {
+    min-height: 325px;
+  }
+  html:not(.desktop-viewport-mode) .chart-panel .panel-hdr {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  html:not(.desktop-viewport-mode) .radar-panel {
+    min-height: 270px;
+  }
+  html:not(.desktop-viewport-mode) .radar-canvas-wrap {
+    min-height: 175px;
+  }
+  html:not(.desktop-viewport-mode) .sphere-hero-panel {
+    flex: none;
+    height: auto;
+    min-height: 0;
+  }
+  html:not(.desktop-viewport-mode) .sphere-legend {
+    display: none;
+  }
+  html:not(.desktop-viewport-mode) .sphere-stage {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+  }
+  html:not(.desktop-viewport-mode) .sphere-stage canvas {
+    width: 100%;
+    height: 300px;
+    flex: none;
+  }
+  html:not(.desktop-viewport-mode) .venue-cards-stack {
+    position: static;
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding: 0 8px 8px;
+  }
+  html:not(.desktop-viewport-mode) .flow-chart-panel {
+    min-height: 220px;
+  }
+  html:not(.desktop-viewport-mode) .exec-deck-panel,
+  html:not(.desktop-viewport-mode) .deck-pane {
+    height: auto;
+    overflow: visible;
+  }
+  html:not(.desktop-viewport-mode) .cap-top-row {
+    flex-wrap: wrap;
+  }
+  html:not(.desktop-viewport-mode) .cap-presets {
+    flex-wrap: wrap;
+  }
+  html:not(.desktop-viewport-mode) .cap-btn {
+    padding: 5px 8px;
+    font-size: 10.5px;
+  }
+  html:not(.desktop-viewport-mode) .blotter-panel {
+    min-height: 360px;
+  }
+  html:not(.desktop-viewport-mode) .blotter-body {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  html:not(.desktop-viewport-mode) .orderbook-panel {
+    min-height: 360px;
+  }
+  html:not(.desktop-viewport-mode) .tape-panel {
+    min-height: 260px;
+  }
+
+  /* 5-Tab Native Mobile App Switching */
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .col-left,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .col-right,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .sphere-hero-panel,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .center-bottom-row {
+    display: none !important;
+  }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .col-left,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .col-right,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .center-top-row,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="sphere"] .blotter-panel {
+    display: none !important;
+  }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="bot"] .col-center,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="bot"] .col-right {
+    display: none !important;
+  }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="blotter"] .col-left,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="blotter"] .col-right,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="blotter"] .center-top-row,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="blotter"] .sphere-hero-panel,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="blotter"] .flow-chart-panel {
+    display: none !important;
+  }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="book"] .col-left,
+  html:not(.desktop-viewport-mode)[data-mobile-tab="book"] .col-center {
+    display: none !important;
+  }
+
+  /* Fixed Mobile Bottom App Navigation */
+  html:not(.desktop-viewport-mode) .mobile-bottom-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 65;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    min-height: 58px;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+    background: #0a0e16;
+    border-top: 1px solid var(--border-mid);
+  }
+  html:not(.desktop-viewport-mode) .mnav-btn {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 2px;
+    background: transparent;
+    border: none;
+    border-top: 2px solid transparent;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  html:not(.desktop-viewport-mode) .mnav-btn.active {
+    color: var(--cyan);
+    border-top-color: var(--cyan);
+    background: rgba(0, 240, 255, 0.08);
+  }
+  html:not(.desktop-viewport-mode) .mnav-ico {
+    font-size: 14px;
+    line-height: 1.1;
+  }
+  html:not(.desktop-viewport-mode) .mnav-txt {
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  html:not(.desktop-viewport-mode) .mnav-badge {
+    position: absolute;
+    top: 3px;
+    right: calc(50% - 18px);
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 6px;
+    background: var(--cyan);
+    color: #031018;
+    font-size: 9px;
+    font-weight: 800;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  html:not(.desktop-viewport-mode) .toast-stack {
+    bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+    left: 10px;
+    right: 10px;
+    max-width: none;
+  }
   html:not(.desktop-viewport-mode) .modal-card { max-height: calc(100dvh - 16px); }
   html:not(.desktop-viewport-mode) .otp-row { grid-template-columns: 1fr; }
 }

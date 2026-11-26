@@ -9,15 +9,16 @@
         var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
           (window.screen && Math.min(window.screen.width, window.screen.height) < 1024 && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
         if (!isMobile) return;
-        var mode = 'DESKTOP';
-        try { mode = localStorage.getItem('qc_view_mode') || 'DESKTOP'; } catch (_) {}
+        var mode = 'MOBILE';
+        try { mode = localStorage.getItem('qc_view_mode_v2') || 'MOBILE'; } catch (_) {}
         var meta = document.getElementById('viewportMeta');
-        if (mode === 'MOBILE') {
-          if (meta) meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes');
-          document.documentElement.classList.add('mobile-viewport-mode');
-        } else {
+        if (mode === 'DESKTOP') {
           if (meta) meta.setAttribute('content', 'width=1366, user-scalable=yes');
           document.documentElement.classList.add('desktop-viewport-mode');
+        } else {
+          if (meta) meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes');
+          document.documentElement.classList.add('mobile-viewport-mode');
+          document.documentElement.dataset.mobileTab = 'chart';
         }
       } catch (_) {}
     })();
@@ -170,6 +171,21 @@
         <span class="sm-label">BREAKER</span>
         <span class="sm-val armed" id="stripBreaker">ARMED ●</span>
       </div>
+    </div>
+  </div>
+
+  <!-- Mobile App Compact Telemetry Bar (Visible only on phone layout) -->
+  <div class="mobile-mini-kpi" id="mobileMiniKpi" role="button" tabindex="0" title="Chạm để mở quản lý Vốn & Auto-Bot">
+    <div class="mmk-item">
+      <span class="mmk-lbl">TÀI SẢN</span>
+      <strong class="mmk-val" id="mobMiniEq">$100.00</strong>
+    </div>
+    <div class="mmk-item">
+      <span class="mmk-lbl">LỜI / LỖ</span>
+      <strong class="mmk-val pos" id="mobMiniPnl">+$0.00</strong>
+    </div>
+    <div class="mmk-item mmk-right">
+      <span class="bot-state-pill idle" id="mobMiniBot">IDLE</span>
     </div>
   </div>
 
@@ -682,6 +698,31 @@
       </section>
     </aside>
   </main>
+
+  <!-- Mobile App Bottom Tab Navigation (Visible only in Mobile App Mode) -->
+  <nav class="mobile-bottom-nav" id="mobileBottomNav" aria-label="Menu điều hướng điện thoại">
+    <button type="button" class="mnav-btn active" data-mtab="chart">
+      <span class="mnav-ico">📊</span>
+      <span class="mnav-txt">Biểu Đồ</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mtab="sphere">
+      <span class="mnav-ico">🌐</span>
+      <span class="mnav-txt">Quả Cầu</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mtab="bot">
+      <span class="mnav-ico">🤖</span>
+      <span class="mnav-txt">Bot &amp; Vốn</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mtab="blotter">
+      <span class="mnav-ico">📋</span>
+      <span class="mnav-txt">Vị Thế</span>
+      <span class="mnav-badge hidden" id="mobNavPosBadge">0</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mtab="book">
+      <span class="mnav-ico">📖</span>
+      <span class="mnav-txt">Sổ Lệnh</span>
+    </button>
+  </nav>
 
   <!-- ==================== LIVE API / HYPERLIQUID DEX + ZERO-TRUST 2FA MODAL ==================== -->
   <div class="modal-backdrop hidden" id="apiModal" role="dialog" aria-modal="true" aria-labelledby="apiModalTitle">

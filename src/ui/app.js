@@ -469,6 +469,27 @@
       }
     }
 
+    const mobEq = $('mobMiniEq');
+    if (mobEq) mobEq.textContent = `$${m.equity.toFixed(2)}`;
+    const mobPnl = $('mobMiniPnl');
+    if (mobPnl) {
+      const dp = Number.isFinite(m.dailyPnlUsd) ? m.dailyPnlUsd : 0;
+      mobPnl.textContent = dp > 0.005
+        ? `LỜI +$${dp.toFixed(2)}`
+        : (dp < -0.005 ? `LỖ -$${Math.abs(dp).toFixed(2)}` : '$0.00');
+      mobPnl.className = `mmk-val ${dp > 0.005 ? 'pos' : (dp < -0.005 ? 'neg' : 'gold')}`;
+    }
+    const mobBot = $('mobMiniBot');
+    if (mobBot) {
+      mobBot.textContent = botPill.textContent;
+      mobBot.className = botPill.className;
+    }
+    const mobBadge = $('mobNavPosBadge');
+    if (mobBadge) {
+      mobBadge.textContent = String(positions.length);
+      mobBadge.classList.toggle('hidden', positions.length === 0);
+    }
+
     const stripB = $('stripBreaker');
     if (trading.breakerTripped) {
       stripB.textContent = 'TRIPPED ⚠';
@@ -1576,10 +1597,21 @@
       market.toggleLiveWebSocket(!market.wsEnabled);
     });
 
+    const switchMobileTab = (tabKey) => {
+      const validTabs = ['chart', 'sphere', 'bot', 'blotter', 'book'];
+      const targetTab = validTabs.includes(tabKey) ? tabKey : 'chart';
+      document.documentElement.dataset.mobileTab = targetTab;
+      document.querySelectorAll('#mobileBottomNav .mnav-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.mtab === targetTab);
+      });
+      if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
+      window.dispatchEvent(new Event('resize'));
+    };
+
     const applyMobileViewMode = (mode, notify = false) => {
       const meta = $('viewportMeta');
       const btnView = $('btnToggleViewMode');
-      const isDesktopMode = mode !== 'MOBILE';
+      const isDesktopMode = mode === 'DESKTOP';
       if (meta) {
         meta.setAttribute('content', isDesktopMode
           ? 'width=1366, user-scalable=yes'
@@ -1587,19 +1619,22 @@
       }
       document.documentElement.classList.toggle('desktop-viewport-mode', isDesktopMode);
       document.documentElement.classList.toggle('mobile-viewport-mode', !isDesktopMode);
-      try { localStorage.setItem('qc_view_mode', isDesktopMode ? 'DESKTOP' : 'MOBILE'); } catch (_) {}
+      if (!isDesktopMode && !document.documentElement.dataset.mobileTab) {
+        switchMobileTab('chart');
+      }
+      try { localStorage.setItem('qc_view_mode_v2', isDesktopMode ? 'DESKTOP' : 'MOBILE'); } catch (_) {}
       if (btnView) {
         btnView.textContent = isDesktopMode ? '📱 ĐT' : '🖥 PC';
-        btnView.title = isDesktopMode ? 'Chuyển sang giao diện Điện thoại' : 'Chuyển sang giao diện Máy tính (PC 3 cột)';
+        btnView.title = isDesktopMode ? 'Chuyển sang giao diện App Điện thoại' : 'Chuyển sang giao diện Máy tính (PC 3 cột)';
       }
       window.dispatchEvent(new Event('resize'));
       if (notify) {
         showToast({
           type: 'cyan',
-          title: isDesktopMode ? '🖥 GIAO DIỆN MÁY TÍNH (PC 3 CỘT)' : '📱 GIAO DIỆN ĐIỆN THOẠI',
+          title: isDesktopMode ? '🖥 GIAO DIỆN MÁY TÍNH (PC 3 CỘT)' : '📱 GIAO DIỆN APP ĐIỆN THOẠI',
           msg: isDesktopMode
-            ? 'Đã bật bố cục đầy đủ 1366px giống PC (xoay ngang đt hoặc zoom 2 ngón cực nét).'
-            : 'Đã chuyển về bố cục cuộn dọc tối ưu cho màn hình điện thoại.'
+            ? 'Đã bật bố cục đầy đủ 1366px giống PC (xoay ngang đt hoặc zoom 2 ngón).'
+            : 'Đã bật giao diện App 5 tab gọn đẹp, chữ to rõ nét cho điện thoại.'
         });
       }
     };
@@ -1612,6 +1647,18 @@
         const curDesktop = document.documentElement.classList.contains('desktop-viewport-mode');
         applyMobileViewMode(curDesktop ? 'MOBILE' : 'DESKTOP', true);
       });
+    }
+
+    const mobNav = $('mobileBottomNav');
+    if (mobNav) {
+      mobNav.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-mtab]');
+        if (btn) switchMobileTab(btn.dataset.mtab);
+      });
+    }
+    const mobMini = $('mobileMiniKpi');
+    if (mobMini) {
+      mobMini.addEventListener('click', () => switchMobileTab('bot'));
     }
 
     $('btnModeDemo').addEventListener('click', () => {

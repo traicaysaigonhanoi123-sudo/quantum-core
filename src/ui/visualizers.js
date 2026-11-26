@@ -540,11 +540,18 @@
 
       ctx.clearRect(0, 0, w, h);
 
-      const rightPanelW = w < 620 ? 190 : 254;
-      const availW = Math.max(180, w - rightPanelW);
-      const cx = availW * 0.50;
-      const cy = h * 0.51;
-      const radius = Math.min(availW * 0.39, h * 0.43);
+      const isMobileStacked = typeof document !== 'undefined' && (
+        document.documentElement.classList.contains('mobile-viewport-mode') ||
+        (w < 540 && !document.documentElement.classList.contains('desktop-viewport-mode'))
+      );
+
+      const rightPanelW = isMobileStacked ? 0 : (w < 620 ? 190 : 254);
+      const availW = isMobileStacked ? w : Math.max(180, w - rightPanelW);
+      const cx = isMobileStacked ? w * 0.58 : availW * 0.50;
+      const cy = isMobileStacked ? h * 0.46 : h * 0.51;
+      const radius = isMobileStacked
+        ? Math.min(w * 0.33, h * 0.39)
+        : Math.min(availW * 0.39, h * 0.43);
 
       const coreGlow = ctx.createRadialGradient(cx, cy, 4, cx, cy, radius * 1.2);
       if (shock > 0.25) {
@@ -574,7 +581,9 @@
       ctx.stroke();
       ctx.restore();
 
-      this._renderConduits(ctx, w, h, cx, cy, radius, rightPanelW, st, shock, t);
+      if (!isMobileStacked) {
+        this._renderConduits(ctx, w, h, cx, cy, radius, rightPanelW, st, shock, t);
+      }
 
       const cosY = Math.cos(this.rotY), sinY = Math.sin(this.rotY);
       const cosX = Math.cos(this.rotX), sinX = Math.sin(this.rotX);
