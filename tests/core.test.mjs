@@ -1213,7 +1213,8 @@ test('State persistence restores active Auto-Bot/positions and live entry confir
   assert.ok(overextSig.rsi > 70);
   assert.equal(overextSig.side, 'WAIT', `Must wait instead of chasing overextended pump (score=${overextSig.score})`);
 
-  // 2. Multi-tick confirmation (needs 3 consecutive ticks) + Anti-double-loss 2nd-position block
+  // 2. Live _liveWsStarted readiness + Multi-tick confirmation (3 checks) + Anti-double-loss 2nd-position block
+  market._liveWsStarted = true;
   const solSt = market.getSymbolState('SOL-PERP');
   const shortCandles = [];
   let spx = 70.0;
@@ -1230,6 +1231,7 @@ test('State persistence restores active Auto-Bot/positions and live entry confir
   solSt.price = spx;
   solSt.prevPrice = spx;
   market.applyLiveVenueQuote('SOL-PERP', 'HYPERLIQUID', spx, 0.008, -1.8);
+  assert.ok(solSt.lastLiveAt > 0, 'applyLiveVenueQuote must stamp lastLiveAt');
   market._hydrateLiveOrderflowFromCandles(solSt, solSt.signalCandles);
   market._rebuildOrderbook(solSt);
   for (let t = 0; t < 60; t++) market.tick();

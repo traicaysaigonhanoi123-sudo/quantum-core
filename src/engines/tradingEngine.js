@@ -959,7 +959,15 @@
       for (const candSym of scanOrder) {
         if (this._hasSymbolExposure(candSym)) continue;
         const candSt = this.market.getSymbolState(candSym);
-        if (this.market._liveWsStarted && !candSt?.lastLiveAt) continue;
+        const hasLiveData = Boolean(
+          candSt && (
+            candSt.lastLiveAt ||
+            candSt.liveWsPrice ||
+            candSt.liveHlPrice ||
+            (candSt.liveVenuePrices && Object.keys(candSt.liveVenuePrices).length > 0)
+          )
+        );
+        if (this.market._liveWsStarted && !hasLiveData) continue;
 
         const sig = this.market.getDirectionalSignal(candSym);
         let targetSide = null;

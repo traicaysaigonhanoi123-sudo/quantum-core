@@ -592,6 +592,7 @@
         }
         this._hydrateLiveOrderflowFromCandles(st, st.signalCandles);
         this._rebuildOrderbook(st);
+        st.lastLiveAt = Date.now();
         return true;
       };
 
@@ -679,6 +680,7 @@
         st.prevPrice = st.price;
         this._hydrateLiveOrderflowFromCandles(st, st.signalCandles);
         this._rebuildOrderbook(st);
+        st.lastLiveAt = Date.now();
       } catch (_) {
         // Silent fallback if offline or CORS blocked
       }
@@ -721,6 +723,7 @@
       if (!st.venueChange24hPct) st.venueChange24hPct = {};
       st.liveVenuePrices[venueId] = px;
       st.venuePrices[venueId] = px;
+      st.lastLiveAt = Date.now();
       if (Number.isFinite(change24hPct)) {
         st.venueChange24hPct[venueId] = change24hPct;
       }
