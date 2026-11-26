@@ -22,3 +22,7 @@ Hệ thống giao diện Quant & Orderflow Terminal đa sàn tại `D:\QuantumCo
 - `server/`: `server.mjs` (Node HTTP Zero-Trust `HttpOnly` cookie, rate limit, path guard) & `cloudflare-waf-rules.json`.
 - `docs/`: `architecture-diagram.html`, `api-hoppscotch.md`.
 - `tests/`: `core.test.mjs`.
+
+## Bản quyền & Giấy phép (Copyright & License)
+Copyright © 2026 **traicaysaigonhanoi123-sudo** — **All Rights Reserved**.
+Xem chi tiết điều khoản tại [LICENSE](./LICENSE). Nghiêm cấm sao chép, chỉnh sửa, phân phối hoặc sử dụng thương mại khi chưa có sự đồng ý bằng văn bản của tác giả.

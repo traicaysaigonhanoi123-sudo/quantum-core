@@ -2,6 +2,8 @@
   "name": "quantum-core-terminal",
   "version": "2.0.0",
   "description": "QUANTUM CORE // Multi-Exchange Quant & Orderflow Terminal (Zero-Trust Architecture)",
+  "author": "traicaysaigonhanoi123-sudo",
+  "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "node server/server.mjs",

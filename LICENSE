@@ -1,0 +1,36 @@
+Proprietary Software License — All Rights Reserved
+
+Copyright (c) 2026 traicaysaigonhanoi123-sudo. All Rights Reserved.
+
+1. Ownership & Scope
+This notice applies to all source code, trading algorithms, risk engines, execution
+adapters, cryptographic signers, UI visualizers, stylesheets, configurations, and
+documentation contained in QUANTUM CORE // Multi-Exchange Quant & Orderflow Terminal
+(the "Software"). All intellectual property rights remain the exclusive property of
+traicaysaigonhanoi123-sudo (the "Copyright Holder").
+
+2. Restrictions
+No permission or license is granted to any person or organization to copy, reproduce,
+modify, merge, publish, distribute, sublicense, rent, lease, sell, re-host, or use
+any portion of the Software for commercial or non-commercial purposes without the
+express prior written consent of the Copyright Holder.
+
+3. Repository Viewing Clarification
+Public or private read access to the source repository (including via GitHub or
+deployments) does NOT grant any right to reuse, fork for redistribution, extract
+algorithms, or deploy copies of the Software without written authorization.
+
+4. Disclaimer of Warranty & Financial Risk
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING TRADING LOSSES, DATA LOSS, OR BUSINESS INTERRUPTION) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE.
+
+---
+Tóm tắt quyền tác giả (Tiếng Việt):
+Bản quyền (c) 2026 traicaysaigonhanoi123-sudo. Bảo lưu mọi quyền (All Rights Reserved).
+Nghiêm cấm mọi hành vi sao chép, chỉnh sửa, phân phối lại, deploy lại hoặc khai thác
+thương mại bất kỳ phần nào của mã nguồn, thuật toán giao dịch và giao diện dự án này
+nếu chưa có sự đồng ý bằng văn bản của tác giả.
