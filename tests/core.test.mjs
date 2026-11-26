@@ -1444,3 +1444,74 @@ test('QuantumAccountAuth enforces Gmail OTP + CAPTCHA, 3-device max with Yes/No 
   assert.equal(cloneCheck.ok, true);
   assert.equal(cloneCheck.user.liveActivated, true);
 });
+
+test('Stop-loss execution bounds gap slippage, protects breakeven, enforces leverage SL cap, and aligns stale venues', () => {
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas });
+  trading.setCapital(1000);
+
+  // 1. Reproduce XRP-PERP 0.9559 -> 0.9128 (-4.51%) sudden gap
+  market.wsEnabled = true;
+  market.applyLiveVenueQuote('XRP-PERP', 'HYPERLIQUID', 0.9559, 0.01, 0);
+  const xrpPos = trading.placeMarketOrder({
+    symbol: 'XRP-PERP',
+    exchange: 'HYPERLIQUID',
+    side: 'LONG',
+    sizeUsd: 1040,
+    leverage: 5,
+    slPct: 0.65,
+    tpPct: 1.60,
+    source: 'BOT'
+  });
+  assert.ok(xrpPos);
+  const expectedSl = xrpPos.slPrice;
+
+  // Sudden gap to 0.9128 (-4.51%)
+  market.applyLiveVenueQuote('XRP-PERP', 'HYPERLIQUID', 0.9128, 0.01, -4.51);
+  trading.onMarketTick();
+
+  const xrpClosed = trading.history.find((h) => h.id === xrpPos.id);
+  assert.ok(xrpClosed, 'XRP-PERP should close on stop loss');
+  assert.equal(xrpClosed.reason, 'STOP LOSS HIT');
+  assert.ok(xrpClosed.exitPrice <= expectedSl && xrpClosed.exitPrice >= expectedSl * 0.9985,
+    `Expected bounded SL fill near ${expectedSl}, got ${xrpClosed.exitPrice}`);
+  assert.ok(xrpClosed.pnl > -10.0, `Expected bounded stop loss > -$10, got ${xrpClosed.pnl}`);
+
+  // 2. Breakeven flash-gap protection on SOL-PERP
+  trading.setCapital(1000);
+  market.applyLiveVenueQuote('SOL-PERP', 'HYPERLIQUID', 68.0, 0.01, 0);
+  const solPos = trading.placeMarketOrder({
+    symbol: 'SOL-PERP',
+    exchange: 'HYPERLIQUID',
+    side: 'LONG',
+    sizeUsd: 600,
+    leverage: 5,
+    slPct: 0.65,
+    tpPct: 1.60,
+    source: 'MANUAL'
+  });
+  assert.ok(solPos);
+
+  // Move up +0.6R so Auto-Breakeven engages
+  market.applyLiveVenueQuote('SOL-PERP', 'HYPERLIQUID', 68.0 * 1.0042, 0.01, 0.42);
+  trading.onMarketTick();
+  assert.equal(solPos.beLocked, true, 'Auto-Breakeven should lock above 0.55R');
+
+  // Flash-crash -5% in one tick
+  market.applyLiveVenueQuote('SOL-PERP', 'HYPERLIQUID', 64.6, 0.01, -5.0);
+  trading.onMarketTick();
+  const solClosed = trading.history.find((h) => h.id === solPos.id);
+  assert.ok(solClosed);
+  assert.equal(solClosed.reason, 'BREAKEVEN EXIT');
+  assert.ok(solClosed.pnl >= 0, `Breakeven exit must stay non-negative after gap, got ${solClosed.pnl}`);
+
+  // 3. Leverage-aware SL cap on HIGH_RISK 50x & stale un-polled venue alignment
+  trading.setRiskMode('HIGH_RISK');
+  trading.setHighRiskLeverage(50);
+  assert.ok(trading.getSafeSlCapPct(50, 'HIGH_RISK') <= 0.70);
+
+  const freshMarket = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  freshMarket.applyLiveVenueQuote('XRP-PERP', 'BINANCE', 1.25, 0.01, 2.0);
+  const hlPx = freshMarket.getPrice('XRP-PERP', 'HYPERLIQUID');
+  assert.ok(Math.abs(hlPx - 1.25) / 1.25 < 0.01, `Un-polled venue should align to 1.25, got ${hlPx}`);
+});

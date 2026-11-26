@@ -29,6 +29,10 @@
   let liveSessionCredentials = null; // Strict RAM-only; cleared on revoke or switch to DEMO
 
   const $ = (id) => document.getElementById(id);
+  function fmtSignedUsd(val, digits = 2) {
+    const n = Number(val) || 0;
+    return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(digits)}`;
+  }
   const isHttpOrigin = typeof window !== 'undefined' && window.location.protocol.startsWith('http');
   const isLocalSignerOrigin = isHttpOrigin && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
 
@@ -328,7 +332,7 @@
       if (pxEl) pxEl.textContent = `$${market.formatPrice(px, st.symbol)}`;
       if (flEl) {
         const m = flow / 1e6;
-        flEl.innerHTML = `Flow: <span class="${m >= 0 ? 'pos' : 'neg'}">${m >= 0 ? '+' : ''}$${m.toFixed(2)}M</span>`;
+        flEl.innerHTML = `Flow: <span class="${m >= 0 ? 'pos' : 'neg'}">${fmtSignedUsd(m, 2)}M</span>`;
       }
       if (scEl) scEl.textContent = score;
     });
@@ -400,15 +404,14 @@
     $('kpiEquity').textContent = `$${m.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const uSign = m.unrealizedPnl >= 0 ? '+' : '';
     const uEl = $('kpiUnrealized');
-    uEl.textContent = `uPnL: ${uSign}$${m.unrealizedPnl.toFixed(2)} (${uSign}${m.unrealizedPct.toFixed(2)}%)`;
+    uEl.textContent = `uPnL: ${fmtSignedUsd(m.unrealizedPnl, 2)} (${uSign}${m.unrealizedPct.toFixed(2)}%)`;
     uEl.className = `kpi-pnl ${m.unrealizedPnl >= 0 ? 'pos' : 'neg'}`;
 
     $('kpiDrawdown').textContent = `DD: ${m.drawdownPct.toFixed(2)}%`;
     $('kpiFreeMargin').textContent = `$${m.freeMargin.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-    const rSign = m.realizedPnl >= 0 ? '+' : '';
     const rEl = $('kpiRealized');
-    rEl.textContent = `${rSign}$${m.realizedPnl.toFixed(2)}`;
+    rEl.textContent = fmtSignedUsd(m.realizedPnl, 2);
     rEl.className = `ms-val ${m.realizedPnl >= 0 ? 'pos' : 'neg'}`;
 
     $('kpiWinRate').textContent = `${m.winRate.toFixed(1)}% (${m.wins}/${m.wins + m.losses})`;
@@ -471,10 +474,10 @@
 
       if (progEl) {
         const dp = Number.isFinite(m.dailyPnlUsd) ? m.dailyPnlUsd : 0;
-        const dpSign = dp >= 0 ? '+' : '';
+        const dpFmt = fmtSignedUsd(dp, 2);
         progEl.textContent = trading.dailyProfitLocked
-          ? `🔒 ${dpSign}$${dp.toFixed(2)} / +$${dayPlan.dailyProfitLockUsd.toFixed(2)}`
-          : `${dpSign}$${dp.toFixed(2)} / +$${dayPlan.dailyProfitLockUsd.toFixed(2)}`;
+          ? `🔒 ${dpFmt} / +$${dayPlan.dailyProfitLockUsd.toFixed(2)}`
+          : `${dpFmt} / +$${dayPlan.dailyProfitLockUsd.toFixed(2)}`;
         progEl.className = `plan-prog-badge ${trading.dailyProfitLocked ? 'locked' : (dp >= 0 ? 'pos' : 'neg')}`;
       }
 
@@ -581,7 +584,7 @@
             ? '<span class="be-tag">TRAIL 🔒</span>'
             : (p.beLocked ? '<span class="be-tag">SL=BE 🔒</span>' : (p.hedgeGroupId ? '<span class="arb-badge">HEDGE</span>' : ''));
           const slTpCell = p.hedgeGroupId
-            ? `<span class="cyan">Delta-Neutral</span> <span class="muted">(F: ${(p.accruedFundingUsd || 0) >= 0 ? '+' : ''}$${(p.accruedFundingUsd || 0).toFixed(2)})</span>`
+            ? `<span class="cyan">Delta-Neutral</span> <span class="muted">(F: ${fmtSignedUsd(p.accruedFundingUsd || 0, 2)})</span>`
             : `<span class="neg">${market.formatPrice(p.slPrice, p.symbol)}</span> / <span class="pos">${market.formatPrice(p.tpPrice, p.symbol)}</span>`;
           return `
             <tr>
@@ -591,7 +594,7 @@
               <td>${market.formatPrice(p.entryPrice, p.symbol)}</td>
               <td class="gold">${market.formatPrice(p.markPrice, p.symbol)}</td>
               <td>${slTpCell}</td>
-              <td class="${pnlCls}"><strong>${sign}$${p.unrealizedPnl.toFixed(2)}</strong> (${sign}${p.roePct.toFixed(1)}%)</td>
+              <td class="${pnlCls}"><strong>${fmtSignedUsd(p.unrealizedPnl, 2)}</strong> (${sign}${p.roePct.toFixed(1)}%)</td>
               <td><button class="btn btn-xs btn-danger-outline" data-close-pos="${p.id}">Đóng</button></td>
             </tr>`;
         })
@@ -648,18 +651,16 @@
         .slice(0, 25)
         .map((h) => {
           const cls = h.pnl >= 0 ? 'pos' : 'neg';
-          const sign = h.pnl >= 0 ? '+' : '';
           const fee = Number(h.feeUsd) || 0;
           const gross = Number.isFinite(Number(h.grossPnl)) ? Number(h.grossPnl) : (h.pnl + fee);
-          const grossSign = gross >= 0 ? '+' : '';
           return `
             <tr>
               <td class="muted">${h.time}</td>
               <td><strong>${h.symbol}</strong> <span class="${h.side === 'LONG' ? 'pos' : 'neg'}">${h.side}</span></td>
               <td>${market.formatPrice(h.entryPrice, h.symbol)} → ${market.formatPrice(h.exitPrice, h.symbol)}</td>
               <td class="gold">${h.reason}</td>
-              <td class="muted" title="Lãi gộp (Gross): ${grossSign}$${gross.toFixed(2)} | Phí 2 chiều + trượt giá: -$${fee.toFixed(2)}">-$${fee.toFixed(2)}</td>
-              <td class="${cls}"><strong>${sign}$${h.pnl.toFixed(2)}</strong></td>
+              <td class="muted" title="Lãi gộp (Gross): ${fmtSignedUsd(gross, 2)} | Phí 2 chiều + trượt giá: -$${fee.toFixed(2)}">-$${fee.toFixed(2)}</td>
+              <td class="${cls}"><strong>${fmtSignedUsd(h.pnl, 2)}</strong></td>
             </tr>`;
         })
         .join('');

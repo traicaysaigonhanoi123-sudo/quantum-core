@@ -914,7 +914,8 @@
         if (this.botDirectionMode === 'LONG_ONLY') targetSide = 'LONG';
         else if (this.botDirectionMode === 'SHORT_ONLY') targetSide = 'SHORT';
 
-        const slPct = sig.suggestedSlPct || 0.65;
+        const preliminaryPlan = this.computeCapitalPlan(undefined, undefined, { symbol: sym, exchange: prefVenue, slPct: sig.suggestedSlPct || 0.60, isMaker: false });
+        const slPct = this._clampBotSlPct(sig.suggestedSlPct || 0.60, preliminaryPlan.maxSafeLeverage);
         const plan = this.computeCapitalPlan(undefined, undefined, { symbol: sym, exchange: prefVenue, slPct, isMaker: false });
         const tpPct = Number(Math.max(sig.suggestedTpPct || 1.55, plan.minTpPct).toFixed(2));
         const sizeUsd = this.calculateOptimalSize({ symbol: sym, exchange: prefVenue, slPct, isMaker: false });
@@ -969,6 +970,12 @@
         );
         if (this.market._liveWsStarted && !hasLiveData) continue;
 
+        const venuePx = this.market.getPrice(candSym, prefVenue);
+        const refPx = candSt?.price || 0;
+        if (this.market._liveWsStarted && refPx > 0 && Math.abs(venuePx - refPx) / refPx > 0.008) {
+          continue;
+        }
+
         const sig = this.market.getDirectionalSignal(candSym);
         let targetSide = null;
         if (this.botDirectionMode === 'LONG_ONLY') {
@@ -1006,7 +1013,7 @@
 
       if (!best) return null;
 
-      const slPct = best.sig.suggestedSlPct || 0.65;
+      const slPct = this._clampBotSlPct(best.sig.suggestedSlPct || 0.60, profile.maxSafeLeverage);
       const plan = this.computeCapitalPlan(undefined, undefined, { symbol: best.sym, exchange: prefVenue, slPct, isMaker: false });
       const tpPct = Number(Math.max(best.sig.suggestedTpPct || 1.45, plan.minTpPct).toFixed(2));
       const sizeUsd = this.calculateOptimalSize({ symbol: best.sym, exchange: prefVenue, slPct, isMaker: false });
@@ -1120,12 +1127,39 @@
       };
     }
 
+    getSafeSlCapPct(leverage, riskMode = this.riskMode) {
+      const lev = Math.max(1, Number(leverage) || 5);
+      const levCap = Math.max(0.25, Math.min(0.85, Number((35 / lev).toFixed(2))));
+      if (riskMode === 'SAFE') return Math.min(0.65, levCap);
+      return levCap;
+    }
+
+    _clampBotSlPct(rawSlPct, leverage, riskMode = this.riskMode) {
+      const cap = this.getSafeSlCapPct(leverage, riskMode);
+      return Number(Math.max(0.25, Math.min(cap, Number(rawSlPct) || 0.6)).toFixed(2));
+    }
+
+    _computeStopFillPrice(pos, marketPx, reason) {
+      if (!Number.isFinite(pos.slPrice) || pos.slPrice <= 0) return marketPx;
+      const dir = pos.side === 'LONG' ? 1 : -1;
+      const gapFrac = dir === 1
+        ? Math.max(0, (pos.slPrice - marketPx) / pos.slPrice)
+        : Math.max(0, (marketPx - pos.slPrice) / pos.slPrice);
+      const estSlipBps = this.market.estimateSlippageBps(pos.symbol, pos.sizeUsd || 100);
+      const isProtectedExit = reason === 'BREAKEVEN EXIT' || reason === 'TRAILING PROFIT';
+      const maxSlipFrac = isProtectedExit
+        ? 0.0005
+        : Math.max(0.0003, Math.min(0.0012, (estSlipBps * 1.1) / 10000));
+      const appliedSlip = Math.min(gapFrac, maxSlipFrac);
+      return pos.slPrice * (1 - dir * appliedSlip);
+    }
+
     calculateOptimalSize({ symbol, exchange, slPct, isMaker = true }) {
       const sym = symbol || this.market.activeSymbol;
       const ex = (exchange && exchange !== 'ALL') ? exchange : this.getPreferredVenue('HYPERLIQUID');
       const metrics = this.getMetrics();
       const profile = this.computeCapitalPlan(metrics.equity, undefined, { symbol: sym, exchange: ex, slPct, isMaker });
-      const safeSl = Math.max(0.15, Number(slPct) || 0.8);
+      const safeSl = Math.max(0.15, Number(slPct) || 0.65);
 
       const entryFeeBps = this.market.getVenueFeeBps(ex, isMaker);
       const exitFeeBps = this.market.getVenueFeeBps(ex, false);
@@ -1133,7 +1167,7 @@
       const roundTripCostPct = (entryFeeBps + exitFeeBps + slipBps) / 100;
 
       const totalRiskPerDollar = (safeSl + roundTripCostPct) / 100;
-      const maxDollarRisk = metrics.equity * (this.riskShield.riskPerTradePct / 100);
+      const maxDollarRisk = metrics.equity * (profile.riskPerTradePct / 100);
       const rawOptimal = maxDollarRisk / Math.max(0.001, totalRiskPerDollar);
       const marginUsageCap = profile.marginUsageCap || (profile.tier === 'MICRO' ? 0.70 : 0.85);
       const maxMarginCap = metrics.freeMargin * profile.maxSafeLeverage * marginUsageCap;
@@ -1454,6 +1488,7 @@
         slPrice: order.slPrice,
         tpPrice: order.tpPrice,
         initialRiskPct: order.slPct || 0.8,
+        plannedMaxLossUsd: Number((order.sizeUsd * (((Number(order.slPct) || 0.65) + 0.12) / 100)).toFixed(2)),
         beLocked: false,
         trailingActive: false,
         hedgeGroupId: order.hedgeGroupId || null,
@@ -1466,6 +1501,7 @@
         unrealizedPnl: -entryFeeUsd,
         roePct: (-entryFeeUsd / order.marginUsd) * 100,
         source: order.source,
+        openedAtTick: this.tickCounter,
         openedAt: Date.now()
       };
       this.positions.unshift(pos);
@@ -1697,6 +1733,12 @@
           continue;
         }
 
+        if (!Number.isFinite(pos.slPrice) || pos.slPrice <= 0) {
+          const fallbackSl = this._clampBotSlPct(pos.initialRiskPct || 0.65, pos.leverage);
+          pos.initialRiskPct = fallbackSl;
+          pos.slPrice = pos.entryPrice * (1 - dir * (fallbackSl / 100));
+        }
+
         const movePct = ((px - pos.entryPrice) / pos.entryPrice) * 100 * dir;
         const rMultiple = movePct / Math.max(0.15, pos.initialRiskPct || 0.8);
 
@@ -1707,7 +1749,7 @@
         const beBuffer = rtFeeFrac + 0.0012;
         const minBeSl = pos.entryPrice * (1 + dir * beBuffer);
 
-        if (this.riskShield.autoBreakeven && !pos.beLocked && rMultiple >= 0.65) {
+        if (this.riskShield.autoBreakeven && !pos.beLocked && rMultiple >= 0.55) {
           pos.slPrice = minBeSl;
           pos.beLocked = true;
           this._log('SHIELD', `🔒 AUTO-BREAKEVEN: Dời SL ${pos.symbol} #${this._uuid.shortId(pos.id)} khóa lãi dương + phí @ ${this.market.formatPrice(pos.slPrice, pos.symbol)}`);
@@ -1753,7 +1795,8 @@
 
         if (pos.side === 'LONG') {
           if (pos.slPrice && px <= pos.slPrice) {
-            toClose.push({ id: pos.id, reason: pos.trailingActive ? 'TRAILING PROFIT' : (pos.beLocked ? 'BREAKEVEN EXIT' : 'STOP LOSS HIT'), exitPrice: null });
+            const reason = pos.trailingActive ? 'TRAILING PROFIT' : (pos.beLocked ? 'BREAKEVEN EXIT' : 'STOP LOSS HIT');
+            toClose.push({ id: pos.id, reason, exitPrice: this._computeStopFillPrice(pos, px, reason) });
           } else if (pos.tpPrice && px >= pos.tpPrice) {
             toClose.push({ id: pos.id, reason: 'TAKE PROFIT HIT', exitPrice: pos.tpPrice });
           } else if (pos.source === 'BOT' && rMultiple >= 0.35) {
@@ -1761,16 +1804,27 @@
             if (dir * sig.score <= -26) {
               toClose.push({ id: pos.id, reason: 'AI FLOW REVERSAL TP', exitPrice: px });
             }
+          } else if (pos.source === 'BOT' && !pos.beLocked && rMultiple <= -0.55 && (this.tickCounter - (pos.openedAtTick || 0)) >= 6) {
+            const sig = this.market.getDirectionalSignal(pos.symbol);
+            if (dir * sig.score <= -38) {
+              toClose.push({ id: pos.id, reason: 'EARLY AI CUT LOSS', exitPrice: Math.max(px, pos.slPrice) });
+            }
           }
         } else {
           if (pos.slPrice && px >= pos.slPrice) {
-            toClose.push({ id: pos.id, reason: pos.trailingActive ? 'TRAILING PROFIT' : (pos.beLocked ? 'BREAKEVEN EXIT' : 'STOP LOSS HIT'), exitPrice: null });
+            const reason = pos.trailingActive ? 'TRAILING PROFIT' : (pos.beLocked ? 'BREAKEVEN EXIT' : 'STOP LOSS HIT');
+            toClose.push({ id: pos.id, reason, exitPrice: this._computeStopFillPrice(pos, px, reason) });
           } else if (pos.tpPrice && px <= pos.tpPrice) {
             toClose.push({ id: pos.id, reason: 'TAKE PROFIT HIT', exitPrice: pos.tpPrice });
           } else if (pos.source === 'BOT' && rMultiple >= 0.35) {
             const sig = this.market.getDirectionalSignal(pos.symbol);
             if (dir * sig.score <= -26) {
               toClose.push({ id: pos.id, reason: 'AI FLOW REVERSAL TP', exitPrice: px });
+            }
+          } else if (pos.source === 'BOT' && !pos.beLocked && rMultiple <= -0.55 && (this.tickCounter - (pos.openedAtTick || 0)) >= 6) {
+            const sig = this.market.getDirectionalSignal(pos.symbol);
+            if (dir * sig.score <= -38) {
+              toClose.push({ id: pos.id, reason: 'EARLY AI CUT LOSS', exitPrice: Math.min(px, pos.slPrice) });
             }
           }
         }
@@ -1930,7 +1984,7 @@
         }
         if (Math.abs(sig.score) <= 22 && st.shockSigma < 0.85 && !this._hasSymbolExposure(sym) && this.limitOrders.length < 2) {
           const px = this.market.getPrice(sym, prefVenue);
-          const slPct = Math.max(0.55, sig.suggestedSlPct || 0.65);
+          const slPct = this._clampBotSlPct(Math.max(0.50, sig.suggestedSlPct || 0.60), profile.maxSafeLeverage);
           const tpPct = Number(Math.max(slPct * 2.15, profile.minTpPct).toFixed(2));
           const stepFrac = Math.max(0.0022, ((sig.atrPct || 0.14) / 100) * 1.6);
           const sizeUsd = this.calculateOptimalSize({ symbol: sym, exchange: prefVenue, slPct, isMaker: true });
@@ -1965,7 +2019,7 @@
           }
         }
         if (bestArb) {
-          const slPct = bestArb.sig.suggestedSlPct || 0.55;
+          const slPct = this._clampBotSlPct(bestArb.sig.suggestedSlPct || 0.55, profile.maxSafeLeverage);
           const plan = this.computeCapitalPlan(undefined, undefined, { symbol: bestArb.sym, exchange: prefVenue, slPct, isMaker: false });
           const tpPct = Number(Math.max(bestArb.sig.suggestedTpPct || 1.25, plan.minTpPct).toFixed(2));
           const sizeUsd = this.calculateOptimalSize({ symbol: bestArb.sym, exchange: prefVenue, slPct, isMaker: false });
@@ -1994,7 +2048,7 @@
           }
         }
         if (bestMr) {
-          const slPct = bestMr.sig.suggestedSlPct || 0.55;
+          const slPct = this._clampBotSlPct(bestMr.sig.suggestedSlPct || 0.55, profile.maxSafeLeverage);
           const plan = this.computeCapitalPlan(undefined, undefined, { symbol: bestMr.sym, exchange: prefVenue, slPct, isMaker: false });
           const tpPct = Number(Math.max(slPct * 2.15, plan.minTpPct).toFixed(2));
           const sizeUsd = this.calculateOptimalSize({ symbol: bestMr.sym, exchange: prefVenue, slPct, isMaker: false });

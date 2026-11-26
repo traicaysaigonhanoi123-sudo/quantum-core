@@ -721,6 +721,7 @@
       if (!st) return;
       if (!st.liveVenuePrices) st.liveVenuePrices = {};
       if (!st.venueChange24hPct) st.venueChange24hPct = {};
+      const hadAnyLive = Boolean(st.liveWsPrice || st.liveHlPrice || Object.keys(st.liveVenuePrices).length > 0);
       st.liveVenuePrices[venueId] = px;
       st.venuePrices[venueId] = px;
       st.lastLiveAt = Date.now();
@@ -734,12 +735,17 @@
         }
       }
       const isPrimary = this.activeExchange === venueId || (this.activeExchange === 'ALL' && !st.liveWsPrice && venueId === 'HYPERLIQUID');
-      if (isPrimary && Math.abs(px - st.price) / Math.max(1e-9, st.price) > 0.02) {
+      if ((!hadAnyLive || isPrimary) && Math.abs(px - st.price) / Math.max(1e-9, st.price) > 0.02) {
         this._rebaseSymbolToPrice(st, px);
         st.venuePrices[venueId] = px;
         st.liveVenuePrices[venueId] = px;
         if (Number.isFinite(change24hPct)) {
           st.venueChange24hPct[venueId] = change24hPct;
+        }
+      }
+      for (const ex of EXCHANGES) {
+        if (!st.liveVenuePrices[ex.id] && Math.abs((st.venuePrices[ex.id] || 0) - px) / Math.max(1e-9, px) > 0.01) {
+          st.venuePrices[ex.id] = px;
         }
       }
     }
@@ -1439,8 +1445,8 @@
           }
         }
 
-        suggestedSlPct = Number(Math.max(0.35, Math.min(1.05, atrPct * 3.8)).toFixed(2));
-        suggestedTpPct = Number(Math.max(0.85, Math.min(2.35, suggestedSlPct * 2.2)).toFixed(2));
+        suggestedSlPct = Number(Math.max(0.30, Math.min(0.75, atrPct * 2.6)).toFixed(2));
+        suggestedTpPct = Number(Math.max(0.75, Math.min(2.10, suggestedSlPct * 2.25)).toFixed(2));
       } else {
         const extFromEma21Pct = ((lastClose - ema21) / Math.max(1e-9, ema21)) * 100;
         const maxSafeExtPct = Math.max(0.45, atrPct * 3.4);
@@ -1461,8 +1467,8 @@
           rawScore *= 0.4;
         }
 
-        suggestedSlPct = Number(Math.max(0.45, Math.min(1.05, Math.max(atrPct * 2.7, cfg.vol * 100 * 6.5))).toFixed(2));
-        suggestedTpPct = Number(Math.max(1.02, Math.min(2.35, suggestedSlPct * 2.2)).toFixed(2));
+        suggestedSlPct = Number(Math.max(0.35, Math.min(0.80, Math.max(atrPct * 2.2, cfg.vol * 100 * 5.0))).toFixed(2));
+        suggestedTpPct = Number(Math.max(0.85, Math.min(2.15, suggestedSlPct * 2.25)).toFixed(2));
       }
 
       const score = Math.max(-100, Math.min(100, Math.round(rawScore)));
