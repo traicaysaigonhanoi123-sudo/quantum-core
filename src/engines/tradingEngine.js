@@ -60,6 +60,8 @@
       this.botCooldown = 0;
       this.tickCounter = 0;
       this.lastClosedMap = {};
+      this._signalConfirmMap = {};
+      this._lastBotEntryTick = -999;
 
       // Adaptive Capital Plan & Daily Profit Lock
       this.riskMode = 'BALANCED'; // 'SAFE' | 'BALANCED' | 'AGGRESSIVE'
@@ -454,6 +456,122 @@
       return prof;
     }
 
+    exportState() {
+      const cloneObj = (o) => JSON.parse(JSON.stringify(o));
+      return {
+        version: 1,
+        savedAt: Date.now(),
+        initialCapital: this.initialCapital,
+        demoCapitalBackup: this.demoCapitalBackup,
+        balance: this.balance,
+        peakEquity: this.peakEquity,
+        realizedPnl: this.realizedPnl,
+        dailyStartEquity: this.dailyStartEquity,
+        dailyPeakProfitUsd: this.dailyPeakProfitUsd,
+        dailyProfitLocked: Boolean(this.dailyProfitLocked),
+        dailyProfitLockReason: this.dailyProfitLockReason || '',
+        dailyProfitLockEnabled: Boolean(this.dailyProfitLockEnabled),
+        riskMode: this.riskMode || 'BALANCED',
+        botRunning: Boolean(this.botRunning),
+        botStrategy: this.botStrategy || 'MOMENTUM',
+        botDirectionMode: this.botDirectionMode || 'AUTO',
+        breakerTripped: Boolean(this.breakerTripped),
+        breakerReason: this.breakerReason || '',
+        autoFlattenOnBreak: Boolean(this.autoFlattenOnBreak),
+        riskShield: cloneObj(this.riskShield),
+        wins: this.wins,
+        losses: this.losses,
+        positions: cloneObj(this.positions),
+        limitOrders: cloneObj(this.limitOrders),
+        history: cloneObj(this.history.slice(0, 60)),
+        logs: cloneObj(this.logs.slice(0, 40)),
+        marketPrefs: {
+          activeSymbol: this.market.activeSymbol,
+          activeExchange: this.market.activeExchange,
+          timeframe: this.market.timeframe,
+          mtfFilterEnabled: Boolean(this.market.mtfFilterEnabled),
+          newsSpikeFilterEnabled: Boolean(this.market.newsSpikeFilterEnabled)
+        }
+      };
+    }
+
+    importState(snap) {
+      if (!snap || typeof snap !== 'object') return false;
+      const cap = Number(snap.initialCapital);
+      if (!Number.isFinite(cap) || cap < 10) return false;
+
+      const cloneList = (arr) => (Array.isArray(arr) ? arr.map((x) => ({ ...x })) : []);
+      this.mode = 'DEMO';
+      this.initialCapital = cap;
+      this.demoCapitalBackup = Number.isFinite(Number(snap.demoCapitalBackup)) ? Number(snap.demoCapitalBackup) : cap;
+      this.balance = Number.isFinite(Number(snap.balance)) ? Number(snap.balance) : cap;
+      this.peakEquity = Number.isFinite(Number(snap.peakEquity)) ? Math.max(this.balance, Number(snap.peakEquity)) : this.balance;
+      this.realizedPnl = Number.isFinite(Number(snap.realizedPnl)) ? Number(snap.realizedPnl) : 0;
+      this.dailyStartEquity = Number.isFinite(Number(snap.dailyStartEquity)) && Number(snap.dailyStartEquity) > 0
+        ? Number(snap.dailyStartEquity)
+        : cap;
+      this.dailyPeakProfitUsd = Number.isFinite(Number(snap.dailyPeakProfitUsd)) ? Number(snap.dailyPeakProfitUsd) : 0;
+      this.dailyProfitLocked = Boolean(snap.dailyProfitLocked);
+      this.dailyProfitLockReason = typeof snap.dailyProfitLockReason === 'string' ? snap.dailyProfitLockReason : '';
+      this.dailyProfitLockEnabled = snap.dailyProfitLockEnabled !== undefined ? Boolean(snap.dailyProfitLockEnabled) : true;
+      this.riskMode = ['SAFE', 'BALANCED', 'AGGRESSIVE'].includes(snap.riskMode) ? snap.riskMode : 'BALANCED';
+      this.botRunning = Boolean(snap.botRunning);
+      this.botStrategy = typeof snap.botStrategy === 'string' ? snap.botStrategy : 'MOMENTUM';
+      this.botDirectionMode = ['AUTO', 'LONG_ONLY', 'SHORT_ONLY', 'HEDGE'].includes(snap.botDirectionMode)
+        ? snap.botDirectionMode
+        : 'AUTO';
+      this.breakerTripped = Boolean(snap.breakerTripped);
+      this.breakerReason = typeof snap.breakerReason === 'string' ? snap.breakerReason : '';
+      this.autoFlattenOnBreak = snap.autoFlattenOnBreak !== undefined ? Boolean(snap.autoFlattenOnBreak) : true;
+      if (snap.riskShield && typeof snap.riskShield === 'object') {
+        this.riskShield = { ...this.riskShield, ...snap.riskShield };
+      }
+      this.wins = Math.max(0, Number(snap.wins) || 0);
+      this.losses = Math.max(0, Number(snap.losses) || 0);
+
+      this.positions = cloneList(snap.positions).filter((p) => p && p.symbol && Number.isFinite(Number(p.entryPrice)) && Number.isFinite(Number(p.sizeUsd)));
+      this.limitOrders = cloneList(snap.limitOrders).filter((o) => o && o.symbol && Number.isFinite(Number(o.entryPrice)) && Number.isFinite(Number(o.sizeUsd)));
+      this.history = cloneList(snap.history).slice(0, 60);
+      this.logs = cloneList(snap.logs).slice(0, 40);
+      this._signalConfirmMap = {};
+      this._lastBotEntryTick = -999;
+
+      if (snap.marketPrefs && typeof snap.marketPrefs === 'object') {
+        if (typeof snap.marketPrefs.mtfFilterEnabled === 'boolean') {
+          this.market.mtfFilterEnabled = snap.marketPrefs.mtfFilterEnabled;
+        }
+        if (typeof snap.marketPrefs.newsSpikeFilterEnabled === 'boolean') {
+          this.market.newsSpikeFilterEnabled = snap.marketPrefs.newsSpikeFilterEnabled;
+        }
+        if (typeof snap.marketPrefs.timeframe === 'string') {
+          this.market.timeframe = snap.marketPrefs.timeframe;
+        }
+        if (typeof snap.marketPrefs.activeExchange === 'string') {
+          this.market.setExchange(snap.marketPrefs.activeExchange);
+        }
+        if (typeof snap.marketPrefs.activeSymbol === 'string') {
+          if (typeof this.market.ensureInstrument === 'function') {
+            this.market.ensureInstrument(snap.marketPrefs.activeSymbol, snap.marketPrefs.activeExchange || 'ALL');
+          }
+          if (this.market.instruments[snap.marketPrefs.activeSymbol]) {
+            this.market.setSymbol(snap.marketPrefs.activeSymbol);
+          }
+        }
+      }
+
+      if (typeof this.market.ensureInstrument === 'function') {
+        this.positions.forEach((p) => this.market.ensureInstrument(p.symbol, p.exchange, p.entryPrice));
+        this.limitOrders.forEach((o) => this.market.ensureInstrument(o.symbol, o.exchange, o.entryPrice));
+      }
+
+      this._syncRiskToCapitalProfile(Math.max(10, this.balance));
+      const eqNow = this.getMetrics().equity;
+      this.equityHistory = Array.from({ length: 48 }, () => eqNow);
+      this._log('SYS', `🔄 Khôi phục phiên giao dịch gần nhất: Bot ${this.botRunning ? 'ĐANG BẬT' : 'TẠM DỪNG'} • ${this.positions.length} vị thế mở • Số dư $${this.balance.toFixed(2)}.`);
+      this._emit('updated');
+      return true;
+    }
+
     _normalizeVenueId(raw) {
       if (!raw || typeof raw !== 'string') return null;
       const u = raw.toUpperCase();
@@ -781,30 +899,61 @@
         return pos;
       }
 
-      if (this._directionalPosCount() >= profile.maxConcurrentDirectional) return null;
+      const dirPositions = this.positions.filter((p) => !p.hedgeGroupId);
+      if (dirPositions.length >= profile.maxConcurrentDirectional) return null;
+
+      // Anti-double-loss guard: never open a 2nd concurrent directional trade too fast or while trade #1 is already losing
+      if (dirPositions.length >= 1) {
+        if (this.market.wsEnabled && (this.tickCounter - this._lastBotEntryTick) < 24) {
+          return null;
+        }
+        const losingOpen = dirPositions.some((p) => {
+          const dir = p.side === 'LONG' ? 1 : -1;
+          const movePct = ((p.markPrice - p.entryPrice) / Math.max(1e-9, p.entryPrice)) * 100 * dir;
+          return movePct <= -Math.max(0.08, (p.initialRiskPct || 0.65) * 0.15);
+        });
+        if (losingOpen) return null;
+      }
 
       const scanOrder = (profile.tier === 'MICRO' || profile.tier === 'INSUFFICIENT')
         ? profile.preferredSymbols
         : [sym, ...Object.keys(this.market.instruments).filter((s) => s !== sym)];
 
+      const reqScore = dirPositions.length >= 1 ? (profile.minSignalScore + 6) : profile.minSignalScore;
       let best = null;
       for (const candSym of scanOrder) {
         if (this._hasSymbolExposure(candSym)) continue;
+        const candSt = this.market.getSymbolState(candSym);
+        if (this.market._liveWsStarted && !candSt?.lastLiveAt) continue;
+
         const sig = this.market.getDirectionalSignal(candSym);
         let targetSide = null;
         if (this.botDirectionMode === 'LONG_ONLY') {
-          if (sig.score >= profile.minSignalScore) targetSide = 'LONG';
+          if (sig.score >= reqScore) targetSide = 'LONG';
         } else if (this.botDirectionMode === 'SHORT_ONLY') {
-          if (sig.score <= -profile.minSignalScore) targetSide = 'SHORT';
-        } else if (sig.side !== 'WAIT' && Math.abs(sig.score) >= profile.minSignalScore) {
+          if (sig.score <= -reqScore) targetSide = 'SHORT';
+        } else if (sig.side !== 'WAIT' && Math.abs(sig.score) >= reqScore) {
           targetSide = sig.side;
         }
-        if (!targetSide) continue;
+        if (!targetSide) {
+          this._signalConfirmMap[candSym] = { side: null, streak: 0, lastTick: this.tickCounter };
+          continue;
+        }
 
         // Same-wave anti-chasing cooldown per symbol & direction
         const lastClosed = this.lastClosedMap[candSym];
         if (lastClosed && lastClosed.side === targetSide && (this.tickCounter - lastClosed.tick) < 55) {
           continue;
+        }
+
+        // Multi-tick signal confirmation in live mode: require 3 consistent ticks before entering
+        if (this.market.wsEnabled) {
+          const prevConf = this._signalConfirmMap[candSym];
+          const streak = (prevConf && prevConf.side === targetSide && (this.tickCounter - prevConf.lastTick) <= 4)
+            ? prevConf.streak + 1
+            : 1;
+          this._signalConfirmMap[candSym] = { side: targetSide, streak, lastTick: this.tickCounter };
+          if (streak < 3) continue;
         }
 
         if (!best || Math.abs(sig.score) > Math.abs(best.sig.score)) {
@@ -831,7 +980,9 @@
       });
 
       if (pos) {
-        this._log('BOT', `🤖 AI khớp ngay ${best.side} ${best.sym} (${prefVenue} • ${profile.tier}/${plan.riskMode} ${best.sig.confidence}% | ${best.sig.reasons})`);
+        this._lastBotEntryTick = this.tickCounter;
+        delete this._signalConfirmMap[best.sym];
+        this._log('BOT', `🤖 AI đã phân tích & khớp ${best.side} ${best.sym} (${prefVenue} • ${profile.tier}/${plan.riskMode} ${best.sig.confidence}% | ${best.sig.reasons})`);
       }
       return pos;
     }

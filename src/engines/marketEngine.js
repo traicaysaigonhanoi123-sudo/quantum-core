@@ -1365,6 +1365,7 @@
       let spikeBlocked = false;
       let spikeReason = '';
 
+      let entryWarn = '';
       if (this.wsEnabled) {
         // ATR-normalized scoring tuned for real exchange 1m candles (prevents under-scoring 0.08%-0.15% ATR moves)
         const normAtr = Math.max(0.06, atrPct);
@@ -1377,10 +1378,35 @@
 
         rawScore = normTrend + normMacd + flowLeadScore;
 
-        if (rawScore > 0 && ((rsi > 78 && zScore > 1.75) || zScore > 2.2)) {
+        const lastBar = recentCandles[n - 1];
+        const barRange = Math.max(1e-9, lastBar.h - lastBar.l);
+        const upperWickPct = (lastBar.h - Math.max(lastBar.o, lastBar.c)) / barRange;
+        const lowerWickPct = (Math.min(lastBar.o, lastBar.c) - lastBar.l) / barRange;
+        const extFromEma21Pct = ((lastClose - ema21) / Math.max(1e-9, ema21)) * 100;
+        const maxSafeExtPct = Math.max(0.65, normAtr * 4.8);
+
+        // Overextension / peak-and-bottom chasing cap
+        if (rawScore > 0 && ((rsi > 76 && zScore > 1.75) || zScore > 2.15 || extFromEma21Pct > maxSafeExtPct)) {
           rawScore = Math.min(rawScore, 22);
-        } else if (rawScore < 0 && ((rsi < 22 && zScore < -1.75) || zScore < -2.2)) {
+          entryWarn = 'Chờ hồi (quá mua)';
+        } else if (rawScore < 0 && ((rsi < 22 && zScore < -1.75) || zScore < -2.15 || extFromEma21Pct < -maxSafeExtPct)) {
           rawScore = Math.max(rawScore, -22);
+          entryWarn = 'Chờ hồi (quá bán)';
+        }
+
+        // Candle structure & rejection-wick guard (do not enter against an active reversal candle)
+        if (rawScore > 0 && (upperWickPct >= 0.58 || (lastBar.c < lastBar.o && lastClose < ema8))) {
+          rawScore *= 0.45;
+          if (!entryWarn) entryWarn = 'Nến bị xả/râu trên';
+        } else if (rawScore < 0 && (lowerWickPct >= 0.58 || (lastBar.c > lastBar.o && lastClose > ema8))) {
+          rawScore *= 0.45;
+          if (!entryWarn) entryWarn = 'Nến rút chân dưới';
+        }
+
+        // Orderflow agreement guard (block entries when live L2 Bid/Ask & CVD contradict the trend)
+        if ((rawScore > 0 && bidRatio < 0.47 && cvdSlope < 0) || (rawScore < 0 && bidRatio > 0.53 && cvdSlope > 0)) {
+          rawScore *= 0.55;
+          if (!entryWarn) entryWarn = 'Orderflow ngược chiều';
         }
 
         if ((emaSpread821Pct > 0 && emaSlopePct < 0 && macdAccelPct < 0) || (emaSpread821Pct < 0 && emaSlopePct > 0 && macdAccelPct > 0)) {
@@ -1449,7 +1475,8 @@
           ? (htf5m.aligned ? ' • 5m↓✓' : (score > 0 ? ' • 5m↓ NGƯỢC' : ' • 5m↓'))
           : '');
       const spikeTag = spikeBlocked ? ' • ⚡ LỌC TIN' : '';
-      const reasons = `${emaTag} • Bid ${bidPct}% • ${cvdTag} • Z ${zScore.toFixed(1)} • RSI ${Math.round(rsi)}${htfTag}${spikeTag}`;
+      const warnTag = (!spikeBlocked && entryWarn && side === 'WAIT') ? ` • 🛡 ${entryWarn}` : '';
+      const reasons = `${emaTag} • Bid ${bidPct}% • ${cvdTag} • Z ${zScore.toFixed(1)} • RSI ${Math.round(rsi)}${htfTag}${spikeTag}${warnTag}`;
 
       return {
         score,

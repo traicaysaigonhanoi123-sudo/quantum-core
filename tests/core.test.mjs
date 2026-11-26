@@ -1165,3 +1165,102 @@ test('Multi-timeframe 5m trend filter blocks counter-trend 1m bounces and News-S
   trading.onMarketTick();
   assert.equal(trading.positions.some((p) => p.symbol === 'SOL-PERP'), false, 'Bot must stay out of SOL-PERP during news spike');
 });
+
+test('State persistence restores active Auto-Bot/positions and live entry confirmation prevents premature double-loss', () => {
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas });
+  trading.setCapital(250);
+  trading.setRiskMode('AGGRESSIVE');
+
+  // 1. Live overextension cap: exhausted pump (RSI > 70 & Z > 1.45) must cap bullish score
+  market.wsEnabled = true;
+  const now = Date.now();
+  const pumpCandles = [];
+  let px = 60000;
+  for (let i = 55; i > 0; i--) {
+    const o = px;
+    const step = i > 20 ? 15 : 85;
+    const c = o + step;
+    pumpCandles.push({ t: now - i * 60000, o, h: c + 12, l: o - 8, c, v: 1500 });
+    px = c;
+  }
+  const btcSt = market.getSymbolState('BTC-PERP');
+  btcSt.signalCandles = pumpCandles.map((c) => ({ ...c }));
+  btcSt.candles = pumpCandles.map((c) => ({ ...c }));
+  btcSt.currentCandle = { ...pumpCandles[pumpCandles.length - 1] };
+  btcSt.price = px;
+  btcSt.flowImbalance = 0.25;
+  btcSt.cvdHistory = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2];
+  market._rebuildOrderbook(btcSt);
+
+  const overextSig = market.getDirectionalSignal('BTC-PERP');
+  assert.ok(overextSig.rsi > 70);
+  assert.equal(overextSig.side, 'WAIT', `Must wait instead of chasing overextended pump (score=${overextSig.score})`);
+
+  // 2. Multi-tick confirmation (needs 3 consecutive ticks) + Anti-double-loss 2nd-position block
+  const solSt = market.getSymbolState('SOL-PERP');
+  const shortCandles = [];
+  let spx = 70.0;
+  for (let i = 55; i > 0; i--) {
+    const o = spx;
+    const step = i > 14 ? (i % 2 === 0 ? 0.03 : -0.025) : (i % 4 === 0 ? 0.025 : -0.048);
+    const c = o + step;
+    shortCandles.push({ t: now - i * 60000, o, h: Math.max(o, c) + 0.035, l: Math.min(o, c) - 0.045, c, v: 1200 + i * 10 });
+    spx = c;
+  }
+  solSt.signalCandles = shortCandles.map((c) => ({ ...c }));
+  solSt.candles = shortCandles.map((c) => ({ ...c }));
+  solSt.currentCandle = { ...shortCandles[shortCandles.length - 1] };
+  solSt.price = spx;
+  solSt.prevPrice = spx;
+  market.applyLiveVenueQuote('SOL-PERP', 'HYPERLIQUID', spx, 0.008, -1.8);
+  market._hydrateLiveOrderflowFromCandles(solSt, solSt.signalCandles);
+  market._rebuildOrderbook(solSt);
+  for (let t = 0; t < 60; t++) market.tick();
+
+  // Neutralize non-SOL symbols so only SOL-PERP qualifies initially
+  Object.keys(market.instruments).forEach((s) => {
+    if (s !== 'SOL-PERP') {
+      const st = market.getSymbolState(s);
+      st.signalCandles = Array.from({ length: 40 }, (_, k) => ({ t: now - (40 - k) * 60000, o: 100, h: 100.04, l: 99.96, c: 100, v: 500 }));
+      st.flowImbalance = 0;
+      market._rebuildOrderbook(st);
+    }
+  });
+
+  trading.toggleBot(); // call 1 -> confirm streak 1 (no immediate blind entry)
+  assert.equal(trading.positions.length, 0, 'Must not enter immediately on toggleBot without 3-tick confirmation');
+  trading.onMarketTick(); // call 2 -> confirm streak 2 (no entry)
+  assert.equal(trading.positions.length, 0, 'Must not enter on tick 2 without 3rd confirmation');
+  trading.onMarketTick(); // call 3 -> confirmed entry!
+  assert.equal(trading.positions.length, 1, 'Should open SOL-PERP after 3 consistent confirmation checks');
+
+  // Force SOL position underwater -> Bot must refuse to stack a 2nd losing trade
+  trading.positions[0].markPrice = trading.positions[0].entryPrice * 1.005; // SHORT underwater by -0.5%
+  trading.tickCounter += 30;
+  const ethSt = market.getSymbolState('ETH-PERP');
+  ethSt.signalCandles = shortCandles.map((c) => ({ ...c, o: c.o * 25, h: c.h * 25, l: c.l * 25, c: c.c * 25 }));
+  ethSt.candles = ethSt.signalCandles.map((c) => ({ ...c }));
+  ethSt.currentCandle = { ...ethSt.signalCandles[ethSt.signalCandles.length - 1] };
+  ethSt.price = spx * 25;
+  market.applyLiveVenueQuote('ETH-PERP', 'HYPERLIQUID', ethSt.price, 0.008, -1.8);
+  market._hydrateLiveOrderflowFromCandles(ethSt, ethSt.signalCandles);
+  market._rebuildOrderbook(ethSt);
+  const ethBlocked = trading.executeAiSignalOrder({ symbol: 'ETH-PERP', forceEntry: false, source: 'BOT' });
+  assert.equal(ethBlocked, null, 'Must block opening a 2nd position while trade #1 is losing');
+
+  // 3. Export & Import state across simulated app exit/reopen
+  const snapshot = trading.exportState();
+  assert.equal(snapshot.botRunning, true);
+  assert.equal(snapshot.positions.length, 1);
+
+  const market2 = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading2 = new QuantumTradingEngine(market2, { QuantumUUID, QuantumSchemas });
+  const ok = trading2.importState(snapshot);
+  assert.equal(ok, true);
+  assert.equal(trading2.botRunning, true);
+  assert.equal(trading2.initialCapital, 250);
+  assert.equal(trading2.riskMode, 'AGGRESSIVE');
+  assert.equal(trading2.positions.length, 1);
+  assert.equal(trading2.positions[0].symbol, 'SOL-PERP');
+});

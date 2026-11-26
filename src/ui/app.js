@@ -42,6 +42,52 @@
   const radarRenderer = new VolatilityRadarRenderer($('radarCanvas'), market);
   const cvdRenderer = new CvdAndSparkRenderer($('cvdCanvas'), $('kpiSparkCanvas'), market, trading);
 
+  const STORAGE_STATE_KEY = 'qc_terminal_state_v1';
+  let lastSavedStateAt = 0;
+
+  function savePersistedState(force = false) {
+    if (typeof localStorage === 'undefined' || trading.mode === 'LIVE') return;
+    const now = Date.now();
+    if (!force && (now - lastSavedStateAt) < 1200) return;
+    lastSavedStateAt = now;
+    try {
+      const snap = trading.exportState();
+      localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(snap));
+    } catch (_) {}
+  }
+
+  function syncUIFromRestoredState() {
+    const cap = trading.initialCapital || 100;
+    document.querySelectorAll('#capPresets .cap-btn').forEach((b) => {
+      b.classList.toggle('active', Number(b.dataset.cap) === cap);
+    });
+    document.querySelectorAll('#riskModeGroup .rmode-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.rmode === trading.riskMode);
+    });
+    document.querySelectorAll('#botDirGroup .bdir-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.dir === trading.botDirectionMode);
+    });
+    document.querySelectorAll('#botStrategies .strat-item').forEach((item) => {
+      const inp = item.querySelector('input[type="radio"]');
+      const match = Boolean(inp && inp.value === trading.botStrategy);
+      if (inp) inp.checked = match;
+      item.classList.toggle('active', match);
+    });
+    const tfBtns = document.querySelectorAll('#tfGroup .tf-btn');
+    tfBtns.forEach((b) => b.classList.toggle('active', b.dataset.tf === market.timeframe));
+    document.querySelectorAll('.ex-pill').forEach((p) => {
+      p.classList.toggle('active', p.dataset.exchange === market.activeExchange);
+    });
+    const setChk = (id, val) => { const el = $(id); if (el) el.checked = Boolean(val); };
+    setChk('chkDailyProfitLock', trading.dailyProfitLockEnabled);
+    setChk('chkMtfFilter', market.mtfFilterEnabled);
+    setChk('chkNewsSpikeFilter', market.newsSpikeFilterEnabled);
+    setChk('chkAutoSize', trading.riskShield.autoSizeEnabled);
+    setChk('chkPostOnly', trading.riskShield.postOnlyMaker);
+    setChk('chkAutoBE', trading.riskShield.autoBreakeven);
+    setChk('chkAutoFlatten', trading.autoFlattenOnBreak);
+  }
+
   function showToast({ type = 'cyan', title, msg }) {
     const stack = $('toastStack');
     const el = document.createElement('div');
@@ -1495,10 +1541,10 @@
       });
     }
 
-    $('btnToggleBot').addEventListener('click', () => trading.toggleBot());
+    $('btnToggleBot').addEventListener('click', () => { trading.toggleBot(); savePersistedState(true); });
     const topBotBtn = $('btnTopbarBot');
-    if (topBotBtn) topBotBtn.addEventListener('click', () => trading.toggleBot());
-    $('btnResetDemo').addEventListener('click', () => trading.resetDemo());
+    if (topBotBtn) topBotBtn.addEventListener('click', () => { trading.toggleBot(); savePersistedState(true); });
+    $('btnResetDemo').addEventListener('click', () => { trading.resetDemo(); savePersistedState(true); });
 
     const applyCapitalPreset = (capVal) => {
       const cap = Math.max(10, Number(capVal) || 100);
@@ -1873,10 +1919,28 @@
         sphereRenderer.triggerCoinBurst(12, 'CHỐT LÃI!');
         sphereRenderer.triggerPulse('#34d399');
         renderTradingPanels();
+        savePersistedState(true);
       } else if (type === 'updated' || type === 'breakerTripped' || type === 'breakerReset') {
+        renderTradingPanels();
+        savePersistedState(type !== 'updated');
+      }
+    });
+
+    const persistOnLeave = () => savePersistedState(true);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        savePersistedState(true);
+      } else if (document.visibilityState === 'visible') {
+        if (market.wsEnabled && typeof market._pollVenueLive === 'function') {
+          market._pollVenueLive('ALL');
+        }
+        trading.onMarketTick();
+        updateMarketHUD(market.getSymbolState());
         renderTradingPanels();
       }
     });
+    window.addEventListener('pagehide', persistOnLeave);
+    window.addEventListener('beforeunload', persistOnLeave);
   }
 
   // Command Palette (Ctrl+K / Cmd+K)
@@ -1950,18 +2014,40 @@
     requestAnimationFrame(animate);
   }
 
-  // Bootstrap ($100+ Demo Capital + Auto Live Prices across all 5 exchanges)
-  market.timeframe = '1m';
-  trading.setCapital(100);
+  // Bootstrap: Restore active Demo session/Bot state if saved, else default to $100 Demo
+  let restoredSession = false;
+  try {
+    const rawState = localStorage.getItem(STORAGE_STATE_KEY);
+    if (rawState) {
+      const parsedState = JSON.parse(rawState);
+      restoredSession = trading.importState(parsedState);
+    }
+  } catch (_) {}
+
+  if (!restoredSession) {
+    market.timeframe = '1m';
+    trading.setCapital(100);
+  }
   buildVenueCards();
   renderInstrumentButtons();
   bindAllEvents();
+  if (restoredSession) {
+    syncUIFromRestoredState();
+    renderInstrumentButtons();
+  }
   syncAutoSize();
   updateClock();
   updateMarketHUD(market.getSymbolState());
   renderTradingPanels();
   motion.animateBoot();
   market.toggleLiveWebSocket(true);
+  if (restoredSession && (trading.botRunning || trading.positions.length > 0)) {
+    showToast({
+      type: 'cyan',
+      title: trading.botRunning ? '🔄 TIẾP TỤC AUTO-BOT' : '🔄 ĐÃ KHÔI PHỤC PHIÊN CŨ',
+      msg: `Đang giữ nguyên ${trading.positions.length} vị thế mở • Số dư $${trading.balance.toFixed(2)} USDC.`
+    });
+  }
 
   setInterval(updateClock, 1000);
   setInterval(() => {
@@ -1969,6 +2055,7 @@
     trading.onMarketTick();
     updateMarketHUD(market.getSymbolState());
     renderTradingPanels();
+    savePersistedState(false);
   }, 240);
 
   requestAnimationFrame(animate);
