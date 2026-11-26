@@ -1523,6 +1523,33 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 }
 .cop-pill.long .cop-side { color: var(--mint); font-weight: 700; }
 .cop-pill.short .cop-side { color: var(--red); font-weight: 700; }
+.chart-bot-focus-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.chart-bot-focus-badge.hidden { display: none; }
+.chart-bot-focus-badge.preparing {
+  background: rgba(251, 191, 36, 0.16);
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  color: #fcd34d;
+}
+.chart-bot-focus-badge.entered {
+  background: rgba(0, 240, 255, 0.14);
+  border: 1px solid rgba(0, 240, 255, 0.55);
+  color: var(--cyan);
+}
+.chart-bot-focus-badge.returning {
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: var(--mint);
+}
 .empty-row td { text-align: center; color: var(--text-muted); padding: 18px !important; }
 
 .log-feed {

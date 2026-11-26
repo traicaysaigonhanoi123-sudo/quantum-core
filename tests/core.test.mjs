@@ -1515,3 +1515,54 @@ test('Stop-loss execution bounds gap slippage, protects breakeven, enforces leve
   const hlPx = freshMarket.getPrice('XRP-PERP', 'HYPERLIQUID');
   assert.ok(Math.abs(hlPx - 1.25) / 1.25 < 0.01, `Un-polled venue should align to 1.25, got ${hlPx}`);
 });
+
+test('Auto-Bot emits botFocus PREPARING -> ENTERED -> RETURN_BTC lifecycle events cleanly', () => {
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas });
+  trading.setCapital(100);
+  market.wsEnabled = true;
+  market.activeSymbol = 'BTC-PERP';
+
+  const now = Date.now();
+  const liveCandles = [];
+  let px = 68.40;
+  for (let i = 55; i > 0; i--) {
+    const o = px;
+    const step = i > 14 ? (i % 2 === 0 ? 0.03 : -0.025) : (i % 4 === 0 ? 0.025 : -0.048);
+    const c = o + step;
+    liveCandles.push({ t: now - i * 60000, o, h: Math.max(o, c) + 0.035, l: Math.min(o, c) - 0.045, c, v: 1200 + i * 10 });
+    px = c;
+  }
+  const solSt = market.getSymbolState('SOL-PERP');
+  solSt.candles = liveCandles.map((c) => ({ ...c }));
+  solSt.signalCandles = liveCandles.map((c) => ({ ...c }));
+  solSt.currentCandle = { ...liveCandles[liveCandles.length - 1] };
+  solSt.price = px;
+  solSt.prevPrice = px;
+  market.applyLiveVenueQuote('SOL-PERP', 'HYPERLIQUID', px, 0.008, -1.85);
+  market._hydrateLiveOrderflowFromCandles(solSt, solSt.signalCandles);
+  market._rebuildOrderbook(solSt);
+
+  const focusEvents = [];
+  trading.on((type, payload) => {
+    if (type === 'botFocus') focusEvents.push(payload);
+  });
+
+  // Tick 1 (via toggleBot): streak=1 -> PREPARING non-BTC symbol
+  trading.toggleBot();
+  // Tick 2: streak=2 -> PREPARING non-BTC symbol
+  trading.onMarketTick();
+  // Tick 3: streak=3 -> ENTERED
+  trading.onMarketTick();
+
+  const prepEvents = focusEvents.filter((e) => e.phase === 'PREPARING');
+  const enteredEvents = focusEvents.filter((e) => e.phase === 'ENTERED');
+  assert.ok(enteredEvents.length >= 1, 'Should emit ENTERED botFocus event');
+  const enteredSym = enteredEvents[0].symbol;
+  assert.ok(prepEvents.some((e) => e.symbol === enteredSym && e.streak === 1), `Should emit PREPARING streak 1 for ${enteredSym}`);
+  assert.ok(prepEvents.some((e) => e.symbol === enteredSym && e.streak === 2), `Should emit PREPARING streak 2 for ${enteredSym}`);
+
+  // Turning Bot off returns focus back to BTC-PERP
+  trading.toggleBot();
+  assert.ok(focusEvents.some((e) => e.phase === 'RETURN_BTC' && e.symbol === 'BTC-PERP'), 'Should emit RETURN_BTC when bot stops');
+});

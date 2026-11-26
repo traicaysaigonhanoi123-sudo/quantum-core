@@ -62,6 +62,7 @@
       this.lastClosedMap = {};
       this._signalConfirmMap = {};
       this._lastBotEntryTick = -999;
+      this.botFocusTarget = null;
 
       // Adaptive Capital Plan & Daily Profit Lock
       this.riskMode = 'BALANCED'; // 'SAFE' | 'BALANCED' | 'AGGRESSIVE' | 'HIGH_RISK'
@@ -570,6 +571,7 @@
       this.logs = cloneList(snap.logs).slice(0, 40);
       this._signalConfirmMap = {};
       this._lastBotEntryTick = -999;
+      this.botFocusTarget = null;
 
       if (snap.marketPrefs && typeof snap.marketPrefs === 'object') {
         if (typeof snap.marketPrefs.mtfFilterEnabled === 'boolean') {
@@ -885,6 +887,21 @@
       return this.positions.filter((p) => !p.hedgeGroupId).length;
     }
 
+    _setBotFocus(next) {
+      const prev = this.botFocusTarget;
+      const same = (!prev && !next) || (
+        prev && next &&
+        prev.phase === next.phase &&
+        prev.symbol === next.symbol &&
+        prev.side === next.side &&
+        prev.streak === next.streak &&
+        prev.posId === next.posId
+      );
+      if (same) return;
+      this.botFocusTarget = next ? { ...next, updatedAt: Date.now() } : null;
+      this._emit('botFocus', this.botFocusTarget || { phase: 'RETURN_BTC', symbol: 'BTC-PERP' });
+    }
+
     executeAiSignalOrder({ symbol, forceEntry = false, source = 'BOT' } = {}) {
       if (this.breakerTripped) {
         if (forceEntry) {
@@ -957,6 +974,7 @@
 
       const reqScore = dirPositions.length >= 1 ? (profile.minSignalScore + 6) : profile.minSignalScore;
       let best = null;
+      let topPreparing = null;
       for (const candSym of scanOrder) {
         if (this._hasSymbolExposure(candSym)) continue;
         const candSt = this.market.getSymbolState(candSym);
@@ -1003,7 +1021,12 @@
             ? prevConf.streak + 1
             : 1;
           this._signalConfirmMap[candSym] = { side: targetSide, streak, lastTick: this.tickCounter };
-          if (streak < 3) continue;
+          if (streak < 3) {
+            if (!topPreparing || Math.abs(sig.score) > Math.abs(topPreparing.sig.score)) {
+              topPreparing = { sym: candSym, side: targetSide, sig, streak };
+            }
+            continue;
+          }
         }
 
         if (!best || Math.abs(sig.score) > Math.abs(best.sig.score)) {
@@ -1011,7 +1034,22 @@
         }
       }
 
-      if (!best) return null;
+      if (!best) {
+        if (topPreparing) {
+          this._setBotFocus({
+            phase: 'PREPARING',
+            symbol: topPreparing.sym,
+            side: topPreparing.side,
+            exchange: prefVenue,
+            confidence: topPreparing.sig.confidence,
+            streak: topPreparing.streak,
+            requiredStreak: 3
+          });
+        } else if (this.botFocusTarget && this.botFocusTarget.phase === 'PREPARING') {
+          this._setBotFocus(null);
+        }
+        return null;
+      }
 
       const slPct = this._clampBotSlPct(best.sig.suggestedSlPct || 0.60, profile.maxSafeLeverage);
       const plan = this.computeCapitalPlan(undefined, undefined, { symbol: best.sym, exchange: prefVenue, slPct, isMaker: false });
@@ -1033,6 +1071,18 @@
         this._lastBotEntryTick = this.tickCounter;
         delete this._signalConfirmMap[best.sym];
         this._log('BOT', `🤖 AI đã phân tích & khớp ${best.side} ${best.sym} (${prefVenue} • ${profile.tier}/${plan.riskMode} ${best.sig.confidence}% | ${best.sig.reasons})`);
+        this._setBotFocus({
+          phase: 'ENTERED',
+          symbol: pos.symbol,
+          side: pos.side,
+          exchange: pos.exchange,
+          posId: pos.id,
+          entryPrice: pos.entryPrice,
+          slPrice: pos.slPrice,
+          tpPrice: pos.tpPrice,
+          openCount: this._directionalPosCount(),
+          maxCount: profile.maxConcurrentDirectional
+        });
       }
       return pos;
     }
@@ -1069,6 +1119,8 @@
         if (this.positions.length === 0 && this.limitOrders.length === 0) {
           this._log('BOT', '🔎 Bot đang quét đa mã tìm điểm vào hội tụ xác suất cao (Confidence >= 66%)...');
         }
+      } else if (this.botFocusTarget) {
+        this._setBotFocus(null);
       }
       this._emit('updated');
       return this.botRunning;
@@ -1655,6 +1707,7 @@
       }
 
       this._log('SHOCK', `🚨 CIRCUIT BREAKER TRIPPED! ${reason} (Hủy ${cancelledCount} lệnh chờ, đóng bảo vệ ${closedCount} vị thế).`);
+      if (this.botFocusTarget) this._setBotFocus(null);
       this._emit('breakerTripped', { reason, cancelledCount, closedCount });
       this._emit('toast', {
         type: 'neg',
@@ -1914,6 +1967,7 @@
         : `Bảo toàn tối thiểu 70% đỉnh lãi ngày (Đỉnh +$${this.dailyPeakProfitUsd.toFixed(2)}, chốt +$${finalDailyPnl.toFixed(2)})`;
 
       this._log('SHIELD', `🎯 DAILY PROFIT LOCK: ${this.dailyProfitLockReason} — Đã tự khóa lãi & tạm dừng Bot!`);
+      if (this.botFocusTarget) this._setBotFocus(null);
       this._emit('profitLocked', { reason: this.dailyProfitLockReason, dailyPnlUsd: finalDailyPnl, peakProfitUsd: this.dailyPeakProfitUsd });
       this._emit('toast', {
         type: 'pos',
@@ -1964,6 +2018,9 @@
       }
 
       if (this._directionalPosCount() >= profile.maxConcurrentDirectional) {
+        if (this.botFocusTarget && this.botFocusTarget.phase === 'PREPARING') {
+          this._setBotFocus(null);
+        }
         this.botCooldown = 6;
         return;
       }
@@ -1995,7 +2052,10 @@
           if (allowShort && profile.maxConcurrentDirectional > 1) {
             if (this.placeLimitOrder({ symbol: sym, exchange: prefVenue, side: 'SHORT', entryPrice: px * (1 + stepFrac), sizeUsd, leverage: profile.maxSafeLeverage, slPct, tpPct, source: 'BOT' })) placed = true;
           }
-          if (placed) this.botCooldown = 18;
+          if (placed) {
+            this.botCooldown = 18;
+            this._setBotFocus({ phase: 'ENTERED', symbol: sym, side: allowLong ? 'LONG' : 'SHORT', exchange: prefVenue, openCount: this._directionalPosCount(), maxCount: profile.maxConcurrentDirectional });
+          }
         }
       } else if (this.botStrategy === 'STAT_ARB') {
         let bestArb = null;
@@ -2024,7 +2084,10 @@
           const tpPct = Number(Math.max(bestArb.sig.suggestedTpPct || 1.25, plan.minTpPct).toFixed(2));
           const sizeUsd = this.calculateOptimalSize({ symbol: bestArb.sym, exchange: prefVenue, slPct, isMaker: false });
           const pos = this.placeMarketOrder({ symbol: bestArb.sym, exchange: prefVenue, side: bestArb.side, sizeUsd, leverage: plan.maxSafeLeverage, slPct, tpPct, source: 'BOT' });
-          if (pos) this.botCooldown = 15;
+          if (pos) {
+            this.botCooldown = 15;
+            this._setBotFocus({ phase: 'ENTERED', symbol: pos.symbol, side: pos.side, exchange: pos.exchange, posId: pos.id, openCount: this._directionalPosCount(), maxCount: profile.maxConcurrentDirectional });
+          }
         }
       } else if (this.botStrategy === 'MEAN_REV') {
         let bestMr = null;
@@ -2056,6 +2119,7 @@
           if (pos) {
             this._log('BOT', `🤖 MEAN_REV Confirmed Bounce ${bestMr.side} ${bestMr.sym} trên ${prefVenue} (Z ${bestMr.sig.zScore.toFixed(2)} | RSI ${Math.round(bestMr.sig.rsi)})`);
             this.botCooldown = 15;
+            this._setBotFocus({ phase: 'ENTERED', symbol: pos.symbol, side: pos.side, exchange: pos.exchange, posId: pos.id, openCount: this._directionalPosCount(), maxCount: profile.maxConcurrentDirectional });
           }
         }
       }

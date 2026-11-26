@@ -27,6 +27,10 @@
   let coinPickerSort = 'volume';
   let coinPickerQuery = '';
   let liveSessionCredentials = null; // Strict RAM-only; cleared on revoke or switch to DEMO
+  let botAutoSwitchedChart = false;
+  let botReturnBtcTimer = null;
+  let botBadgeHideTimer = null;
+  let userManualChartUntil = 0;
 
   const $ = (id) => document.getElementById(id);
   function fmtSignedUsd(val, digits = 2) {
@@ -826,6 +830,11 @@
   function selectDynamicCoin(sym, targetVenue = coinPickerVenue, silent = false) {
     const st = typeof market.ensureInstrument === 'function' ? market.ensureInstrument(sym) : market.getSymbolState(sym);
     if (!st) return;
+    if (!silent) {
+      if (botReturnBtcTimer) { clearTimeout(botReturnBtcTimer); botReturnBtcTimer = null; }
+      botAutoSwitchedChart = false;
+      userManualChartUntil = st.symbol === 'BTC-PERP' ? 0 : (Date.now() + 12000);
+    }
     if (targetVenue && targetVenue !== market.activeExchange && market.venueCatalog?.[targetVenue]) {
       market.setExchange(targetVenue);
       document.querySelectorAll('.ex-pill').forEach((p) => p.classList.toggle('active', p.dataset.exchange === targetVenue));
@@ -844,6 +853,9 @@
 
   function focusSymbolChart(sym, exchange) {
     if (!sym) return;
+    if (botReturnBtcTimer) { clearTimeout(botReturnBtcTimer); botReturnBtcTimer = null; }
+    botAutoSwitchedChart = false;
+    userManualChartUntil = sym === 'BTC-PERP' ? 0 : (Date.now() + 12000);
     const targetVenue = market.activeExchange === 'ALL' ? 'ALL' : (exchange || market.activeExchange);
     selectDynamicCoin(sym, targetVenue, true);
     renderTradingPanels();
@@ -864,6 +876,84 @@
         ? `${openPos.side} ${openPos.leverage}x • Entry ${market.formatPrice(openPos.entryPrice, sym)} | SL ${market.formatPrice(openPos.slPrice, sym)} | TP ${market.formatPrice(openPos.tpPrice, sym)}`
         : `Đang hiển thị nến live & dự đoán AI cho ${sym}.`
     });
+  }
+
+  function setChartBotFocusBadge(text, modeClass, autoHideMs = 0) {
+    const el = $('chartBotFocusBadge');
+    if (!el) return;
+    if (botBadgeHideTimer) { clearTimeout(botBadgeHideTimer); botBadgeHideTimer = null; }
+    if (!text) {
+      el.className = 'chart-bot-focus-badge hidden';
+      el.textContent = '';
+      return;
+    }
+    el.className = `chart-bot-focus-badge ${modeClass || 'entered'}`;
+    el.textContent = text;
+    if (autoHideMs > 0) {
+      botBadgeHideTimer = setTimeout(() => {
+        el.className = 'chart-bot-focus-badge hidden';
+        el.textContent = '';
+      }, autoHideMs);
+    }
+  }
+
+  function scheduleReturnToBtc(delayMs = 4500) {
+    if (botReturnBtcTimer) clearTimeout(botReturnBtcTimer);
+    botReturnBtcTimer = setTimeout(() => {
+      botReturnBtcTimer = null;
+      if (!botAutoSwitchedChart) return;
+      if (Date.now() < userManualChartUntil) return;
+      if (trading.botFocusTarget && trading.botFocusTarget.phase === 'PREPARING') return;
+      botAutoSwitchedChart = false;
+      if (market.activeSymbol !== 'BTC-PERP') {
+        selectDynamicCoin('BTC-PERP', market.activeExchange, true);
+        renderTradingPanels();
+        if (typeof candleRenderer.draw === 'function') candleRenderer.draw();
+      }
+      setChartBotFocusBadge('↩ Đã vào xong lệnh • Về lại BTC-PERP', 'returning', 2500);
+    }, delayMs);
+  }
+
+  function handleBotFocusEvent(focus) {
+    if (!focus || focus.phase === 'RETURN_BTC') {
+      if (botAutoSwitchedChart) {
+        scheduleReturnToBtc(focus?.immediate ? 300 : 1200);
+      } else {
+        setChartBotFocusBadge('', '');
+      }
+      return;
+    }
+    if (Date.now() < userManualChartUntil) return;
+
+    if (focus.phase === 'PREPARING' && focus.symbol) {
+      if (botReturnBtcTimer) { clearTimeout(botReturnBtcTimer); botReturnBtcTimer = null; }
+      if (market.activeSymbol !== focus.symbol) {
+        selectDynamicCoin(focus.symbol, market.activeExchange, true);
+        botAutoSwitchedChart = true;
+      } else if (focus.symbol !== 'BTC-PERP') {
+        botAutoSwitchedChart = true;
+      }
+      setChartBotFocusBadge(
+        `🤖 AI SẮP VÀO ${focus.side} ${focus.symbol} (${focus.streak || 1}/${focus.requiredStreak || 3} • ${focus.confidence || 70}%)`,
+        'preparing'
+      );
+      renderTradingPanels();
+      if (typeof candleRenderer.draw === 'function') candleRenderer.draw();
+    } else if (focus.phase === 'ENTERED' && focus.symbol) {
+      if (botReturnBtcTimer) { clearTimeout(botReturnBtcTimer); botReturnBtcTimer = null; }
+      if (market.activeSymbol !== focus.symbol) {
+        selectDynamicCoin(focus.symbol, market.activeExchange, true);
+      }
+      botAutoSwitchedChart = true;
+      const doneAll = (focus.openCount || 1) >= (focus.maxCount || 1);
+      setChartBotFocusBadge(
+        `🤖 AI ĐÃ VÀO ${focus.side} ${focus.symbol}${doneAll ? ' • Đủ lệnh, về BTC sau 4s' : ' • Về BTC sau 4s'}`,
+        'entered'
+      );
+      renderTradingPanels();
+      if (typeof candleRenderer.draw === 'function') candleRenderer.draw();
+      scheduleReturnToBtc(4500);
+    }
   }
 
   function renderInstrumentButtons() {
@@ -1759,7 +1849,12 @@
   function bindAllEvents() {
     $('instrumentSelector').addEventListener('click', (e) => {
       const btn = e.target.closest('.inst-btn');
-      if (btn) selectSymbol(btn.dataset.symbol);
+      if (btn) {
+        if (botReturnBtcTimer) { clearTimeout(botReturnBtcTimer); botReturnBtcTimer = null; }
+        botAutoSwitchedChart = false;
+        userManualChartUntil = btn.dataset.symbol === 'BTC-PERP' ? 0 : (Date.now() + 12000);
+        selectSymbol(btn.dataset.symbol);
+      }
     });
 
     $('exchangePills').addEventListener('click', (e) => {
@@ -2684,6 +2779,7 @@
 
     trading.on((type, payload) => {
       if (type === 'toast') showToast(payload);
+      else if (type === 'botFocus') handleBotFocusEvent(payload);
       else if (type === 'tradeClosed' && payload) {
         if (payload.pnl > 0) {
           const burstCount = Math.min(12, Math.max(5, Math.round(5 + payload.pnl * 2)));
