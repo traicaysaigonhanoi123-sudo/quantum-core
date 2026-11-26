@@ -10,6 +10,14 @@ import { createHmac } from 'node:crypto';
 
 const SUPPORTED_VENUES = new Set(['HYPERLIQUID', 'BINANCE', 'BYBIT', 'OKX', 'DERIBIT']);
 
+const OFFICIAL_TIER0_FEES = {
+  HYPERLIQUID: { makerBps: 1.5, takerBps: 4.5, source: 'OFFICIAL_TIER0' },
+  BINANCE:     { makerBps: 2.0, takerBps: 5.0, source: 'OFFICIAL_TIER0' },
+  BYBIT:       { makerBps: 2.0, takerBps: 5.5, source: 'OFFICIAL_TIER0' },
+  OKX:         { makerBps: 2.0, takerBps: 5.0, source: 'OFFICIAL_TIER0' },
+  DERIBIT:     { makerBps: 0.0, takerBps: 5.0, source: 'OFFICIAL_TIER0' }
+};
+
 function numOrZero(val) {
   const n = parseFloat(val);
   return Number.isFinite(n) ? n : 0;
@@ -37,9 +45,10 @@ async function fetchHyperliquidBalance({ walletAddress, vaultAddress, network = 
     : 'https://api.hyperliquid.xyz/info';
   const headers = { 'Content-Type': 'application/json' };
 
-  const [chRes, spotRes] = await Promise.all([
+  const [chRes, spotRes, feeRes] = await Promise.all([
     fetchFn(baseUrl, buildFetchOpts('POST', headers, { type: 'clearinghouseState', user: targetAddr }, useDefaultTimeout)),
-    fetchFn(baseUrl, buildFetchOpts('POST', headers, { type: 'spotClearinghouseState', user: targetAddr }, useDefaultTimeout))
+    fetchFn(baseUrl, buildFetchOpts('POST', headers, { type: 'spotClearinghouseState', user: targetAddr }, useDefaultTimeout)),
+    fetchFn(baseUrl, buildFetchOpts('POST', headers, { type: 'userFees', user: targetAddr }, useDefaultTimeout)).catch(() => null)
   ]);
 
   if (!chRes.ok) {
@@ -48,6 +57,21 @@ async function fetchHyperliquidBalance({ walletAddress, vaultAddress, network = 
 
   const ch = await chRes.json();
   const spot = spotRes.ok ? await spotRes.json() : {};
+  let feeRates = { ...OFFICIAL_TIER0_FEES.HYPERLIQUID };
+  if (feeRes && feeRes.ok) {
+    try {
+      const uf = await feeRes.json();
+      const addRate = parseFloat(uf?.userAddRate);
+      const crossRate = parseFloat(uf?.userCrossRate);
+      if (Number.isFinite(addRate) && Number.isFinite(crossRate) && addRate >= 0 && crossRate >= 0) {
+        feeRates = {
+          makerBps: Number((addRate * 10000).toFixed(4)),
+          takerBps: Number((crossRate * 10000).toFixed(4)),
+          source: 'LIVE_API'
+        };
+      }
+    } catch (_) {}
+  }
 
   const perpEq = numOrZero(ch?.marginSummary?.accountValue ?? ch?.crossMarginSummary?.accountValue);
   const marginUsed = numOrZero(ch?.marginSummary?.totalMarginUsed ?? ch?.crossMarginSummary?.totalMarginUsed);
@@ -74,7 +98,8 @@ async function fetchHyperliquidBalance({ walletAddress, vaultAddress, network = 
     equityUsd: Number(equityUsd.toFixed(4)),
     freeMarginUsd: Number(freeMarginUsd.toFixed(4)),
     perpEquityUsd: Number(perpEq.toFixed(4)),
-    spotUsdc: Number(spotUsdc.toFixed(4))
+    spotUsdc: Number(spotUsdc.toFixed(4)),
+    feeRates
   };
 }
 
@@ -101,6 +126,26 @@ async function fetchBinanceBalance({ apiKey, apiSecret, network = 'MAINNET' }, f
   const equityUsd = numOrZero(data?.totalMarginBalance ?? data?.totalWalletBalance);
   const freeMarginUsd = data?.availableBalance !== undefined ? numOrZero(data.availableBalance) : equityUsd;
 
+  let feeRates = { ...OFFICIAL_TIER0_FEES.BINANCE };
+  try {
+    const feeQs = `symbol=BTCUSDT&timestamp=${ts}&recvWindow=5000`;
+    const feeSig = createHmac('sha256', secret).update(feeQs).digest('hex');
+    const feeUrl = `${baseUrl}/fapi/v1/commissionRate?${feeQs}&signature=${feeSig}`;
+    const feeRes = await fetchFn(feeUrl, buildFetchOpts('GET', { 'X-MBX-APIKEY': key }, undefined, useDefaultTimeout));
+    if (feeRes && feeRes.ok) {
+      const feeData = await feeRes.json().catch(() => ({}));
+      const makerR = parseFloat(feeData?.makerCommissionRate);
+      const takerR = parseFloat(feeData?.takerCommissionRate);
+      if (Number.isFinite(makerR) && Number.isFinite(takerR) && makerR >= 0 && takerR >= 0) {
+        feeRates = {
+          makerBps: Number((makerR * 10000).toFixed(4)),
+          takerBps: Number((takerR * 10000).toFixed(4)),
+          source: 'LIVE_API'
+        };
+      }
+    }
+  } catch (_) {}
+
   return {
     ok: true,
     venue: 'BINANCE',
@@ -108,7 +153,8 @@ async function fetchBinanceBalance({ apiKey, apiSecret, network = 'MAINNET' }, f
     equityUsd: Number(equityUsd.toFixed(4)),
     freeMarginUsd: Number(Math.max(0, freeMarginUsd).toFixed(4)),
     perpEquityUsd: Number(equityUsd.toFixed(4)),
-    spotUsdc: 0
+    spotUsdc: 0,
+    feeRates
   };
 }
 
@@ -151,6 +197,31 @@ async function fetchBybitBalance({ apiKey, apiSecret, network = 'MAINNET' }, fet
   const equityUsd = numOrZero(acct.totalEquity ?? acct.totalMarginBalance ?? acct.totalWalletBalance);
   const freeMarginUsd = acct.totalAvailableBalance !== undefined ? numOrZero(acct.totalAvailableBalance) : equityUsd;
 
+  let feeRates = { ...OFFICIAL_TIER0_FEES.BYBIT };
+  try {
+    const tsFee = String(nowFn());
+    const recvFee = '5000';
+    const qsFee = 'category=linear&symbol=BTCUSDT';
+    const signFee = createHmac('sha256', secret).update(tsFee + key + recvFee + qsFee).digest('hex');
+    const feeRes = await fetchFn(
+      `${baseUrl}/v5/account/fee-rate?${qsFee}`,
+      buildFetchOpts('GET', { 'X-BAPI-API-KEY': key, 'X-BAPI-TIMESTAMP': tsFee, 'X-BAPI-RECV-WINDOW': recvFee, 'X-BAPI-SIGN': signFee }, undefined, useDefaultTimeout)
+    );
+    if (feeRes && feeRes.ok) {
+      const feeJson = await feeRes.json().catch(() => ({}));
+      const item = feeJson?.result?.list?.[0];
+      const mR = parseFloat(item?.makerFeeRate);
+      const tR = parseFloat(item?.takerFeeRate);
+      if (Number.isFinite(mR) && Number.isFinite(tR) && mR >= 0 && tR >= 0) {
+        feeRates = {
+          makerBps: Number((mR * 10000).toFixed(4)),
+          takerBps: Number((tR * 10000).toFixed(4)),
+          source: 'LIVE_API'
+        };
+      }
+    }
+  } catch (_) {}
+
   return {
     ok: true,
     venue: 'BYBIT',
@@ -158,7 +229,8 @@ async function fetchBybitBalance({ apiKey, apiSecret, network = 'MAINNET' }, fet
     equityUsd: Number(equityUsd.toFixed(4)),
     freeMarginUsd: Number(Math.max(0, freeMarginUsd).toFixed(4)),
     perpEquityUsd: Number(equityUsd.toFixed(4)),
-    spotUsdc: 0
+    spotUsdc: 0,
+    feeRates
   };
 }
 
@@ -211,6 +283,33 @@ async function fetchOkxBalance({ apiKey, apiSecret, passphrase, network = 'MAINN
   }
   const freeMarginUsd = hasAvailDetail ? Math.min(equityUsd || availSum, availSum) : equityUsd;
 
+  let feeRates = { ...OFFICIAL_TIER0_FEES.OKX };
+  try {
+    const feePath = '/api/v5/account/trade-fee?instType=SWAP';
+    const feeSign = createHmac('sha256', secret).update(`${tsIso}GET${feePath}`).digest('base64');
+    const feeHeaders = {
+      'OK-ACCESS-KEY': key,
+      'OK-ACCESS-SIGN': feeSign,
+      'OK-ACCESS-TIMESTAMP': tsIso,
+      'OK-ACCESS-PASSPHRASE': pass
+    };
+    if (net === 'TESTNET') feeHeaders['x-simulated-trading'] = '1';
+    const feeRes = await fetchFn(`https://www.okx.com${feePath}`, buildFetchOpts('GET', feeHeaders, undefined, useDefaultTimeout));
+    if (feeRes && feeRes.ok) {
+      const feeJson = await feeRes.json().catch(() => ({}));
+      const item = feeJson?.data?.[0];
+      const mR = Math.abs(parseFloat(item?.makerU));
+      const tR = Math.abs(parseFloat(item?.takerU));
+      if (Number.isFinite(mR) && Number.isFinite(tR)) {
+        feeRates = {
+          makerBps: Number((mR * 10000).toFixed(4)),
+          takerBps: Number((tR * 10000).toFixed(4)),
+          source: 'LIVE_API'
+        };
+      }
+    }
+  } catch (_) {}
+
   return {
     ok: true,
     venue: 'OKX',
@@ -218,7 +317,8 @@ async function fetchOkxBalance({ apiKey, apiSecret, passphrase, network = 'MAINN
     equityUsd: Number(equityUsd.toFixed(4)),
     freeMarginUsd: Number(Math.max(0, freeMarginUsd).toFixed(4)),
     perpEquityUsd: Number(equityUsd.toFixed(4)),
-    spotUsdc: 0
+    spotUsdc: 0,
+    feeRates
   };
 }
 
@@ -257,7 +357,8 @@ async function fetchDeribitBalance({ apiKey, apiSecret, network = 'MAINNET' }, f
     equityUsd: Number(eq.toFixed(4)),
     freeMarginUsd: Number(Math.max(0, avail).toFixed(4)),
     perpEquityUsd: Number(eq.toFixed(4)),
-    spotUsdc: 0
+    spotUsdc: 0,
+    feeRates: { ...OFFICIAL_TIER0_FEES.DERIBIT }
   };
 }
 

@@ -23,10 +23,10 @@
   'use strict';
 
   const EXCHANGES = [
-    { id: 'HYPERLIQUID', name: 'HYPERLIQUID', tag: 'DEX L1',   color: '#34d399', baseLatency: 11, weight: 0.25, makerBps: 1.0, takerBps: 3.5 },
+    { id: 'HYPERLIQUID', name: 'HYPERLIQUID', tag: 'DEX L1',   color: '#34d399', baseLatency: 11, weight: 0.25, makerBps: 1.5, takerBps: 4.5 },
     { id: 'BINANCE',     name: 'BINANCE',     tag: 'CEX PERP', color: '#fbbf24', baseLatency: 14, weight: 0.30, makerBps: 2.0, takerBps: 5.0 },
     { id: 'BYBIT',       name: 'BYBIT',       tag: 'LINEAR',   color: '#fb923c', baseLatency: 18, weight: 0.18, makerBps: 2.0, takerBps: 5.5 },
-    { id: 'OKX',         name: 'OKX',         tag: 'SWAP',     color: '#60a5fa', baseLatency: 21, weight: 0.15, makerBps: 1.5, takerBps: 5.0 },
+    { id: 'OKX',         name: 'OKX',         tag: 'SWAP',     color: '#60a5fa', baseLatency: 21, weight: 0.15, makerBps: 2.0, takerBps: 5.0 },
     { id: 'DERIBIT',     name: 'DERIBIT',     tag: 'VOL/PERP', color: '#c084fc', baseLatency: 24, weight: 0.12, makerBps: 0.0, takerBps: 5.0 }
   ];
 
@@ -84,6 +84,8 @@
       // Institutional Pre-Entry Filters (5m MTF Trend Alignment + News-Spike Guard)
       this.mtfFilterEnabled = true;
       this.newsSpikeFilterEnabled = true;
+      this.liveVenueFees = {};
+      this.binanceBnbDiscount = false;
 
       this._initAllSymbols();
     }
@@ -1079,10 +1081,55 @@
       }, 60000);
     }
 
+    setLiveVenueFeeRates(venueId, makerBps, takerBps, source = 'LIVE_API') {
+      const id = String(venueId || '').toUpperCase();
+      if (!id || id === 'ALL') return;
+      const m = Number(makerBps);
+      const t = Number(takerBps);
+      if (!Number.isFinite(m) || !Number.isFinite(t) || m < 0 || t < 0) return;
+      this.liveVenueFees[id] = { makerBps: Number(m.toFixed(4)), takerBps: Number(t.toFixed(4)), source };
+    }
+
+    clearLiveVenueFeeRates(venueId = null) {
+      if (venueId) {
+        delete this.liveVenueFees[String(venueId).toUpperCase()];
+      } else {
+        this.liveVenueFees = {};
+      }
+    }
+
+    setBinanceBnbDiscount(enabled) {
+      this.binanceBnbDiscount = Boolean(enabled);
+    }
+
     getVenueFeeBps(exchangeId, isMaker = true) {
       const targetId = exchangeId && exchangeId !== 'ALL' ? exchangeId : 'HYPERLIQUID';
+      const liveFee = this.liveVenueFees?.[targetId];
+      if (liveFee) {
+        return isMaker ? liveFee.makerBps : liveFee.takerBps;
+      }
       const ex = EXCHANGES.find((e) => e.id === targetId) || EXCHANGES[0];
-      return isMaker ? ex.makerBps : ex.takerBps;
+      let bps = isMaker ? ex.makerBps : ex.takerBps;
+      if (targetId === 'BINANCE' && this.binanceBnbDiscount) {
+        bps = Number((bps * 0.9).toFixed(4));
+      }
+      return bps;
+    }
+
+    getVenueFeeSchedule(exchangeId) {
+      const targetId = exchangeId && exchangeId !== 'ALL' ? exchangeId : 'HYPERLIQUID';
+      const makerBps = this.getVenueFeeBps(targetId, true);
+      const takerBps = this.getVenueFeeBps(targetId, false);
+      const source = this.liveVenueFees?.[targetId]?.source
+        || (targetId === 'BINANCE' && this.binanceBnbDiscount ? 'BNB_-10%' : 'OFFICIAL_TIER0');
+      return {
+        venue: targetId,
+        makerBps,
+        takerBps,
+        makerPct: makerBps / 100,
+        takerPct: takerBps / 100,
+        source
+      };
     }
 
     estimateSlippageBps(sym = this.activeSymbol, sizeUsd = 5000) {

@@ -335,8 +335,7 @@
 
       const entryFeeBps = this.market.getVenueFeeBps(ex, isMaker);
       const exitFeeBps = this.market.getVenueFeeBps(ex, false);
-      const slipBps = isMaker ? 0.3 : this.market.estimateSlippageBps(sym, Math.min(5000, Math.max(100, eq * maxSafeLeverage)));
-      const roundTripCostPct = (entryFeeBps + exitFeeBps + slipBps) / 100;
+      const roundTripCostPct = (entryFeeBps + exitFeeBps) / 100;
 
       const safeEq = Math.max(10, eq);
       const riskPerTradeUsd = Number(((safeEq * riskPerTradePct) / 100).toFixed(2));
@@ -524,7 +523,8 @@
           activeExchange: this.market.activeExchange,
           timeframe: this.market.timeframe,
           mtfFilterEnabled: Boolean(this.market.mtfFilterEnabled),
-          newsSpikeFilterEnabled: Boolean(this.market.newsSpikeFilterEnabled)
+          newsSpikeFilterEnabled: Boolean(this.market.newsSpikeFilterEnabled),
+          binanceBnbDiscount: Boolean(this.market.binanceBnbDiscount)
         }
       };
     }
@@ -579,6 +579,9 @@
         }
         if (typeof snap.marketPrefs.newsSpikeFilterEnabled === 'boolean') {
           this.market.newsSpikeFilterEnabled = snap.marketPrefs.newsSpikeFilterEnabled;
+        }
+        if (typeof snap.marketPrefs.binanceBnbDiscount === 'boolean') {
+          this.market.binanceBnbDiscount = snap.marketPrefs.binanceBnbDiscount;
         }
         if (typeof snap.marketPrefs.timeframe === 'string') {
           this.market.timeframe = snap.marketPrefs.timeframe;
@@ -1215,8 +1218,7 @@
 
       const entryFeeBps = this.market.getVenueFeeBps(ex, isMaker);
       const exitFeeBps = this.market.getVenueFeeBps(ex, false);
-      const slipBps = isMaker ? 0.3 : this.market.estimateSlippageBps(sym, Math.min(5000, Math.max(100, metrics.equity * profile.maxSafeLeverage)));
-      const roundTripCostPct = (entryFeeBps + exitFeeBps + slipBps) / 100;
+      const roundTripCostPct = (entryFeeBps + exitFeeBps) / 100;
 
       const totalRiskPerDollar = (safeSl + roundTripCostPct) / 100;
       const maxDollarRisk = metrics.equity * (profile.riskPerTradePct / 100);
@@ -1237,8 +1239,7 @@
 
       const entryFeeBps = this.market.getVenueFeeBps(ex, isMaker);
       const exitFeeBps = this.market.getVenueFeeBps(ex, false);
-      const slipBps = isMaker ? 0.35 : this.market.estimateSlippageBps(sym, sizeUsd);
-      const feePct = (entryFeeBps + exitFeeBps + slipBps) / 100;
+      const feePct = (entryFeeBps + exitFeeBps) / 100;
 
       const netRewardPct = safeTp - feePct;
       const netRiskPct = safeSl + feePct;
@@ -1526,8 +1527,7 @@
 
     _openPositionFromOrder(order, fillPrice, execLabel) {
       const feeBps = this.market.getVenueFeeBps(order.exchange, Boolean(order.isMaker));
-      const slipBps = order.isMaker ? 0 : this.market.estimateSlippageBps(order.symbol, order.sizeUsd);
-      const entryFeeUsd = order.sizeUsd * ((feeBps + slipBps) / 10000);
+      const entryFeeUsd = order.sizeUsd * (feeBps / 10000);
 
       const pos = {
         id: order.id || this._uuid.v4(),
@@ -1546,6 +1546,7 @@
         hedgeGroupId: order.hedgeGroupId || null,
         accruedFundingUsd: 0,
         entryFeeUsd,
+        entryFeeBps: feeBps,
         isMakerEntry: Boolean(order.isMaker),
         sizeUsd: order.sizeUsd,
         leverage: order.leverage,
@@ -1629,7 +1630,7 @@
       }
       const dir = pos.side === 'LONG' ? 1 : -1;
       const grossPnl = ((exitPrice - pos.entryPrice) / pos.entryPrice) * pos.sizeUsd * dir + (pos.accruedFundingUsd || 0);
-      const isMakerExit = reason.includes('TAKE PROFIT') || reason.includes('ARB PROFIT') || reason.includes('AI FLOW REVERSAL TP');
+      const isMakerExit = reason.includes('TAKE PROFIT') || reason.includes('ARB PROFIT');
       const exitFeeBps = this.market.getVenueFeeBps(pos.exchange, isMakerExit);
       const exitFeeUsd = pos.sizeUsd * (exitFeeBps / 10000);
       const totalFeeUsd = (pos.entryFeeUsd || 0) + exitFeeUsd;
@@ -1664,6 +1665,10 @@
         reason,
         grossPnl,
         feeUsd: totalFeeUsd,
+        entryFeeUsd: pos.entryFeeUsd || 0,
+        exitFeeUsd,
+        entryFeeBps: Number(pos.entryFeeBps) || 0,
+        exitFeeBps,
         pnl: netPnl
       };
       this.history.unshift(record);

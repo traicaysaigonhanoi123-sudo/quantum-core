@@ -1566,3 +1566,100 @@ test('Auto-Bot emits botFocus PREPARING -> ENTERED -> RETURN_BTC lifecycle event
   trading.toggleBot();
   assert.ok(focusEvents.some((e) => e.phase === 'RETURN_BTC' && e.symbol === 'BTC-PERP'), 'Should emit RETURN_BTC when bot stops');
 });
+
+test('DEMO and LIVE charge exact pure exchange fees, support Binance BNB -10%, and sync live fee rates from API', async () => {
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas });
+  trading.setCapital(1000);
+
+  // 1. Official VIP-0/Tier-0 Perpetual schedules
+  assert.equal(market.getVenueFeeBps('HYPERLIQUID', true), 1.5);
+  assert.equal(market.getVenueFeeBps('HYPERLIQUID', false), 4.5);
+  assert.equal(market.getVenueFeeBps('BINANCE', true), 2.0);
+  assert.equal(market.getVenueFeeBps('BINANCE', false), 5.0);
+  assert.equal(market.getVenueFeeBps('BYBIT', true), 2.0);
+  assert.equal(market.getVenueFeeBps('BYBIT', false), 5.5);
+  assert.equal(market.getVenueFeeBps('OKX', true), 2.0);
+  assert.equal(market.getVenueFeeBps('OKX', false), 5.0);
+  assert.equal(market.getVenueFeeBps('DERIBIT', true), 0.0);
+  assert.equal(market.getVenueFeeBps('DERIBIT', false), 5.0);
+
+  // 2. Pure Binance commission math ($1,000 Market + SL Taker = exact $1.00 = 0.05% + 0.05%, zero phantom slippage)
+  const bnPos = trading.placeMarketOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    sizeUsd: 1000,
+    leverage: 5,
+    slPct: 0.8,
+    tpPct: 2.0,
+    source: 'MANUAL'
+  });
+  assert.ok(bnPos);
+  assert.ok(Math.abs(bnPos.entryFeeUsd - 0.50) < 1e-6, `Expected exact $0.50 entry fee, got ${bnPos.entryFeeUsd}`);
+  trading.closePosition(bnPos.id, 'STOP LOSS HIT', bnPos.slPrice);
+  const closedSl = trading.history[0];
+  assert.ok(Math.abs(closedSl.feeUsd - 1.00) < 1e-6, `Expected exact $1.00 round-trip Taker fee, got ${closedSl.feeUsd}`);
+  assert.equal(closedSl.entryFeeBps, 5.0);
+  assert.equal(closedSl.exitFeeBps, 5.0);
+
+  // 3. Binance Limit Maker + TP Maker on $1,000 -> exact $0.40 (0.02% + 0.02%)
+  const limitOrd = trading.placeLimitOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    entryPrice: market.getPrice('BTC-PERP', 'BINANCE'),
+    sizeUsd: 1000,
+    leverage: 5,
+    slPct: 0.8,
+    tpPct: 2.0,
+    source: 'MANUAL'
+  });
+  assert.ok(limitOrd);
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', limitOrd.entryPrice, 0.01, 0);
+  trading.onMarketTick();
+  const makerPos = trading.positions.find((p) => p.symbol === 'BTC-PERP');
+  assert.ok(makerPos);
+  assert.ok(Math.abs(makerPos.entryFeeUsd - 0.20) < 1e-6, `Expected exact $0.20 Maker fee, got ${makerPos.entryFeeUsd}`);
+  trading.closePosition(makerPos.id, 'TAKE PROFIT HIT', makerPos.tpPrice);
+  assert.ok(Math.abs(trading.history[0].feeUsd - 0.40) < 1e-6, `Expected exact $0.40 round-trip Maker fee, got ${trading.history[0].feeUsd}`);
+
+  // 4. Binance BNB -10% discount -> $1,000 Market+SL = exact $0.90
+  market.setBinanceBnbDiscount(true);
+  const bnbPos = trading.placeMarketOrder({
+    symbol: 'ETH-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    sizeUsd: 1000,
+    leverage: 5,
+    slPct: 0.8,
+    tpPct: 2.0,
+    source: 'MANUAL'
+  });
+  assert.ok(bnbPos);
+  trading.closePosition(bnbPos.id, 'STOP LOSS HIT', bnbPos.slPrice);
+  assert.ok(Math.abs(trading.history[0].feeUsd - 0.90) < 1e-6, `Expected $0.90 with BNB discount, got ${trading.history[0].feeUsd}`);
+  market.setBinanceBnbDiscount(false);
+
+  // 5. Live API commissionRate sync overrides Tier-0 until cleared
+  const bnLiveRes = await fetchExchangeBalance(
+    { venue: 'BINANCE', apiKey: 'bn_key_123456', apiSecret: 'bn_secret_abcdef' },
+    {
+      nowFn: () => 1700000000000,
+      fetchFn: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes('commissionRate')
+          ? { symbol: 'BTCUSDT', makerCommissionRate: '0.00018', takerCommissionRate: '0.00045' }
+          : { totalMarginBalance: '500.0', availableBalance: '500.0' }
+      })
+    }
+  );
+  assert.equal(bnLiveRes.ok, true);
+  assert.deepEqual(bnLiveRes.feeRates, { makerBps: 1.8, takerBps: 4.5, source: 'LIVE_API' });
+  market.setLiveVenueFeeRates('BINANCE', bnLiveRes.feeRates.makerBps, bnLiveRes.feeRates.takerBps, bnLiveRes.feeRates.source);
+  assert.equal(market.getVenueFeeBps('BINANCE', true), 1.8);
+  assert.equal(market.getVenueFeeBps('BINANCE', false), 4.5);
+  market.clearLiveVenueFeeRates();
+  assert.equal(market.getVenueFeeBps('BINANCE', false), 5.0);
+});

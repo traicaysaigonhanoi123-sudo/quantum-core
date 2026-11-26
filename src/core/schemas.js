@@ -152,6 +152,10 @@
       reason: h.reason,
       grossPnl: h.grossPnl ?? h.pnl,
       feeUsd: h.feeUsd ?? 0,
+      entryFeeUsd: h.entryFeeUsd ?? 0,
+      exitFeeUsd: h.exitFeeUsd ?? 0,
+      entryFeeBps: h.entryFeeBps ?? 0,
+      exitFeeBps: h.exitFeeBps ?? 0,
       pnl: h.pnl
     };
   }

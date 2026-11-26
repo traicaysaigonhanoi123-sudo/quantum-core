@@ -105,8 +105,20 @@
     setChk('chkNewsSpikeFilter', market.newsSpikeFilterEnabled);
     setChk('chkAutoSize', trading.riskShield.autoSizeEnabled);
     setChk('chkPostOnly', trading.riskShield.postOnlyMaker);
+    setChk('chkBnbFeeDiscount', market.binanceBnbDiscount);
     setChk('chkAutoBE', trading.riskShield.autoBreakeven);
     setChk('chkAutoFlatten', trading.autoFlattenOnBreak);
+    updateVenueFeeBadge();
+  }
+
+  function updateVenueFeeBadge() {
+    const el = $('venueFeeBadge');
+    if (!el || typeof market.getVenueFeeSchedule !== 'function') return;
+    const s = market.getVenueFeeSchedule(market.activeExchange);
+    const srcTag = s.source === 'LIVE_API'
+      ? 'Live API'
+      : (s.source === 'BNB_-10%' ? 'BNB -10%' : 'Tier-0 chuẩn');
+    el.textContent = `Phí ${s.venue}: Maker ${s.makerPct.toFixed(3)}% / Taker ${s.takerPct.toFixed(3)}% (${srcTag})`;
   }
 
   function showToast({ type = 'cyan', title, msg }) {
@@ -173,7 +185,7 @@
     const makerNote = trading.riskShield.postOnlyMaker ? 'Post-Only Maker' : 'Limit';
     const entryFeeBps = market.getVenueFeeBps(ex, trading.riskShield.postOnlyMaker);
     const exitFeeBps = market.getVenueFeeBps(ex, false);
-    const feePct = (entryFeeBps + exitFeeBps + 0.35) / 100;
+    const feePct = (entryFeeBps + exitFeeBps) / 100;
     const netRR = (tpPct - feePct) / Math.max(0.05, slPct + feePct);
     const maxLossUsd = sizeUsd * ((slPct + feePct) / 100);
 
@@ -268,7 +280,7 @@
     const ex = market.activeExchange === 'ALL' ? 'HYPERLIQUID' : market.activeExchange;
     const entryFeeBps = market.getVenueFeeBps(ex, trading.riskShield.postOnlyMaker);
     const exitFeeBps = market.getVenueFeeBps(ex, false);
-    const feePct = (entryFeeBps + exitFeeBps + 0.35) / 100;
+    const feePct = (entryFeeBps + exitFeeBps) / 100;
     const netRR = (tpPct - feePct) / Math.max(0.05, slPct + feePct);
     const maxLossUsd = sizeUsd * ((slPct + feePct) / 100);
 
@@ -690,7 +702,7 @@
               <td><span class="pos-sym-link"><span class="pos-chart-ico">📈</span><strong>${h.symbol}</strong> <span class="${h.side === 'LONG' ? 'pos' : 'neg'}">${h.side}</span></span></td>
               <td>${market.formatPrice(h.entryPrice, h.symbol)} → ${market.formatPrice(h.exitPrice, h.symbol)}</td>
               <td class="gold">${h.reason}</td>
-              <td class="muted" title="Lãi gộp (Gross): ${fmtSignedUsd(gross, 2)} | Phí 2 chiều + trượt giá: -$${fee.toFixed(2)}">-$${fee.toFixed(2)}</td>
+              <td class="muted" title="Lãi gộp (Gross): ${fmtSignedUsd(gross, 2)} | Phí sàn ${h.exchange || ''} (${((Number(h.entryFeeBps) || 0) / 100).toFixed(3)}% + ${((Number(h.exitFeeBps) || 0) / 100).toFixed(3)}%): -$${fee.toFixed(2)}">-$${fee.toFixed(2)}</td>
               <td class="${cls}"><strong>${fmtSignedUsd(h.pnl, 2)}</strong></td>
             </tr>`;
         })
@@ -1089,6 +1101,8 @@
     document.querySelectorAll('.ex-pill').forEach((p) => p.classList.toggle('active', p.dataset.exchange === exId));
     renderInstrumentButtons();
     syncAutoSize();
+    updateSLTPPreview();
+    updateVenueFeeBadge();
     updateMarketHUD(market.getSymbolState());
     sphereRenderer.triggerPulse('#00f0ff');
   }
@@ -1256,8 +1270,10 @@
       await fetch(`${base}/api/v1/auth/sessions/revoke`, { method: 'POST' });
     } catch (_) {}
     liveSessionCredentials = null;
+    if (typeof market.clearLiveVenueFeeRates === 'function') market.clearLiveVenueFeeRates();
     trading.setLiveExecutionAdapter(null);
     trading.revokeLiveSessions();
+    updateVenueFeeBadge();
     verified2faSession = null;
     activeOtpChallengeId = null;
     $('btnSaveLiveConn').disabled = true;
@@ -1298,9 +1314,10 @@
 
       try {
         const headers = { 'Content-Type': 'application/json' };
-        const [chRes, spotRes] = await Promise.all([
+        const [chRes, spotRes, feeRes] = await Promise.all([
           fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify({ type: 'clearinghouseState', user: targetAddr }) }),
-          fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify({ type: 'spotClearinghouseState', user: targetAddr }) })
+          fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify({ type: 'spotClearinghouseState', user: targetAddr }) }),
+          fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify({ type: 'userFees', user: targetAddr }) }).catch(() => null)
         ]);
         if (!chRes.ok) {
           const err = `Hyperliquid API trả lỗi HTTP ${chRes.status}`;
@@ -1310,6 +1327,21 @@
         }
         const ch = await chRes.json();
         const spot = spotRes.ok ? await spotRes.json() : {};
+        let feeRates = { makerBps: 1.5, takerBps: 4.5, source: 'OFFICIAL_TIER0' };
+        if (feeRes && feeRes.ok) {
+          try {
+            const uf = await feeRes.json();
+            const addR = parseFloat(uf?.userAddRate);
+            const crossR = parseFloat(uf?.userCrossRate);
+            if (Number.isFinite(addR) && Number.isFinite(crossR) && addR >= 0 && crossR >= 0) {
+              feeRates = {
+                makerBps: Number((addR * 10000).toFixed(4)),
+                takerBps: Number((crossR * 10000).toFixed(4)),
+                source: 'LIVE_API'
+              };
+            }
+          } catch (_) {}
+        }
         const perpEq = parseFloat(ch?.marginSummary?.accountValue ?? ch?.crossMarginSummary?.accountValue) || 0;
         const marginUsed = parseFloat(ch?.marginSummary?.totalMarginUsed ?? ch?.crossMarginSummary?.totalMarginUsed) || 0;
         const withdrawable = ch?.withdrawable !== undefined ? (parseFloat(ch.withdrawable) || 0) : Math.max(0, perpEq - marginUsed);
@@ -1337,7 +1369,8 @@
           equityUsd: Number(equityUsd.toFixed(4)),
           freeMarginUsd: Number(freeMarginUsd.toFixed(4)),
           perpEquityUsd: Number(perpEq.toFixed(4)),
-          spotUsdc: Number(spotUsdc.toFixed(4))
+          spotUsdc: Number(spotUsdc.toFixed(4)),
+          feeRates
         };
       } catch (e) {
         const err = `Không thể kết nối Hyperliquid API (${e?.message || 'Network error'}).`;
@@ -1403,9 +1436,13 @@
     const forceTab = trading.liveConfig.venueId === 'HYPERLIQUID' ? 'HYPERLIQUID' : 'CEX';
     const res = await fetchRealBalanceFromVenue({ silent, forceTab });
     if (res.ok) {
+      if (res.feeRates && typeof market.setLiveVenueFeeRates === 'function') {
+        market.setLiveVenueFeeRates(res.venue, res.feeRates.makerBps, res.feeRates.takerBps, res.feeRates.source);
+      }
       trading.syncLiveAccountBalance(res);
       syncAutoSize();
       updateSLTPPreview();
+      updateVenueFeeBadge();
       if (!silent) {
         showToast({
           type: 'pos',
@@ -1885,6 +1922,18 @@
       syncAutoSize();
       updateSLTPPreview();
     });
+    const chkBnbFee = $('chkBnbFeeDiscount');
+    if (chkBnbFee) {
+      chkBnbFee.addEventListener('change', (e) => {
+        if (typeof market.setBinanceBnbDiscount === 'function') {
+          market.setBinanceBnbDiscount(e.target.checked);
+        }
+        syncAutoSize();
+        updateSLTPPreview();
+        updateVenueFeeBadge();
+        savePersistedState(true);
+      });
+    }
     $('chkAutoBE').addEventListener('change', (e) => {
       trading.riskShield.autoBreakeven = e.target.checked;
       trading.riskShield.autoTrailing = e.target.checked;
@@ -2367,10 +2416,12 @@
         liveSyncTimer = null;
       }
       liveSessionCredentials = null;
+      if (typeof market.clearLiveVenueFeeRates === 'function') market.clearLiveVenueFeeRates();
       trading.setLiveExecutionAdapter(null);
       trading.setMode('DEMO');
       syncAutoSize();
       updateSLTPPreview();
+      updateVenueFeeBadge();
       $('btnModeDemo').classList.add('active');
       $('btnModeLive').classList.remove('active');
       $('walletModeTag').textContent = 'DEMO USDC';
