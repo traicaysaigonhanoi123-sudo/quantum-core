@@ -1559,6 +1559,16 @@
       });
     }
 
+    const btnToggleForecast = $('btnToggleForecast');
+    if (btnToggleForecast) {
+      btnToggleForecast.addEventListener('click', () => {
+        candleRenderer.showForecast = !candleRenderer.showForecast;
+        btnToggleForecast.textContent = candleRenderer.showForecast ? '🔮 Dự đoán: ON' : '🔮 Dự đoán: OFF';
+        btnToggleForecast.classList.toggle('btn-cyan-outline', candleRenderer.showForecast);
+        btnToggleForecast.classList.toggle('btn-ghost', !candleRenderer.showForecast);
+      });
+    }
+
     $('botStrategies').addEventListener('change', (e) => {
       if (e.target.name === 'botStrategy') {
         trading.setBotStrategy(e.target.value);
@@ -2053,7 +2063,7 @@
   }
 
   function animate(timeMs) {
-    candleRenderer.render();
+    candleRenderer.render(timeMs);
     sphereRenderer.render(timeMs);
     radarRenderer.render(timeMs);
     cvdRenderer.render();

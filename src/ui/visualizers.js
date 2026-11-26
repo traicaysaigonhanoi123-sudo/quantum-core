@@ -43,6 +43,8 @@
       this.tpPct = 1.8;
       this.visibleCount = 48;
       this.pendingDraftOrder = null;
+      this.showForecast = true;
+      this._forecastCache = { key: '', ts: 0, data: null };
 
       this.priceMin = 0;
       this.priceMax = 1;
@@ -89,7 +91,7 @@
       return this.priceMin + ratio * (this.priceMax - this.priceMin);
     }
 
-    render() {
+    render(timeMs = 0) {
       const { ctx, w, h } = fitCanvas(this.canvas);
       const st = this.market.getSymbolState();
       const candles = typeof this.market.getVenueCandles === 'function'
@@ -135,8 +137,10 @@
         ctx.fillText(this.market.formatPrice(pVal, st.symbol), w - this.pad.right + 6, py + 3);
       }
 
-      const stepX = plotW / candles.length;
+      const futureSlots = this.showForecast ? Math.max(5, Math.round(candles.length * 0.16)) : 0;
+      const stepX = plotW / (candles.length + futureSlots);
       const bodyW = Math.max(4, Math.min(14, stepX * 0.68));
+      const lastCandleX = this.pad.left + (candles.length - 1) * stepX + stepX * 0.5;
 
       const areaGrad = ctx.createLinearGradient(0, this.pad.top, 0, h - this.pad.bottom);
       areaGrad.addColorStop(0, this.market.shockIntensity > 0.2 ? 'rgba(255, 59, 107, 0.16)' : 'rgba(0, 240, 255, 0.12)');
@@ -251,6 +255,10 @@
       ctx.font = 'bold 9.5px "JetBrains Mono", monospace';
       ctx.fillText(this.market.formatPrice(activePx, st.symbol), w - this.pad.right + 5, curY + 3);
 
+      if (this.showForecast) {
+        this._renderAiForecast(ctx, w, h, st, activePx, lastCandleX, curY, symPos, timeMs);
+      }
+
       if (this.mouse.inside && this.mouse.x < w - this.pad.right && this.mouse.y > this.pad.top && this.mouse.y < h - this.pad.bottom) {
         const hoverPx = this.yToPrice(this.mouse.y, h);
         ctx.save();
@@ -341,6 +349,241 @@
       ctx.strokeRect(this.pad.left + 4, y - 7, tw, 13);
       ctx.fillStyle = color;
       ctx.fillText(label, this.pad.left + 8, y + 2.5);
+      ctx.restore();
+    }
+
+    _drawRoundedRect(ctx, x, y, w, h, r) {
+      const rr = Math.min(r, w * 0.5, h * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
+    _getCachedForecast(st, activePx) {
+      const ex = (this.trading && typeof this.trading.getPreferredVenue === 'function')
+        ? this.trading.getPreferredVenue('HYPERLIQUID')
+        : this.market.activeExchange;
+      const riskMode = this.trading ? this.trading.riskMode : 'BALANCED';
+      const dirMode = this.trading ? this.trading.botDirectionMode : 'AUTO';
+      const key = `${st.symbol}|${ex}|${riskMode}|${dirMode}|${this.market.timeframe}`;
+      const now = Date.now();
+      if (this._forecastCache.data && this._forecastCache.key === key && (now - this._forecastCache.ts) < 240) {
+        return this._forecastCache.data;
+      }
+
+      const sig = this.market.getDirectionalSignal(st.symbol);
+      const slPct = Number(sig.suggestedSlPct || 0.65);
+      const plan = (this.trading && typeof this.trading.computeCapitalPlan === 'function')
+        ? this.trading.computeCapitalPlan(undefined, undefined, { symbol: st.symbol, exchange: ex, slPct, isMaker: false })
+        : { minSignalScore: 33, minTpPct: 1.45 };
+
+      let dirSide = null;
+      if (dirMode === 'LONG_ONLY') {
+        dirSide = sig.score >= 0 ? 'LONG' : null;
+      } else if (dirMode === 'SHORT_ONLY') {
+        dirSide = sig.score <= 0 ? 'SHORT' : null;
+      } else if (dirMode !== 'HEDGE') {
+        dirSide = sig.score >= 0 ? 'LONG' : 'SHORT';
+      }
+
+      const reqScore = plan.minSignalScore || 33;
+      const absScore = Math.abs(sig.score || 0);
+      const tpPct = Number(Math.max(sig.suggestedTpPct || 1.45, plan.minTpPct || 1.45).toFixed(2));
+      const dir = dirSide === 'SHORT' ? -1 : 1;
+      const projSL = activePx * (1 - dir * (slPct / 100));
+      const projTP = activePx * (1 + dir * (tpPct / 100));
+
+      let status = 'WAIT';
+      if (!sig.spikeBlocked && dirSide) {
+        if (absScore >= reqScore && sig.side === dirSide) status = 'READY';
+        else if (absScore >= 16) status = 'FORMING';
+      }
+
+      const confObj = this.trading && this.trading._signalConfirmMap
+        ? this.trading._signalConfirmMap[st.symbol]
+        : null;
+      const streak = (confObj && dirSide && confObj.side === dirSide)
+        ? Math.min(3, confObj.streak || 0)
+        : 0;
+
+      const data = {
+        sig,
+        dirSide,
+        reqScore,
+        absScore,
+        slPct,
+        tpPct,
+        projSL,
+        projTP,
+        status,
+        streak
+      };
+      this._forecastCache = { key, ts: now, data };
+      return data;
+    }
+
+    _renderAiForecast(ctx, w, h, st, activePx, lastCandleX, curY, symPos, timeMs) {
+      const f = this._getCachedForecast(st, activePx);
+      const plotTop = this.pad.top + 2;
+      const plotBot = h - this.pad.bottom - 2;
+      const xStart = lastCandleX + 3;
+      const xEnd = w - this.pad.right - 2;
+      const laneW = xEnd - xStart;
+
+      // 1. Projected TP / SL Zone & Target Path Arrow in Future Projection Lane
+      if (symPos.length === 0 && (f.status === 'READY' || f.status === 'FORMING') && laneW >= 24 && f.dirSide) {
+        const isLong = f.dirSide === 'LONG';
+        const isReady = f.status === 'READY';
+        const mainCol = isLong ? '#34d399' : '#ff3b6b';
+
+        const clampY = (y) => Math.max(plotTop, Math.min(plotBot, y));
+        const tpY = clampY(this.priceToY(f.projTP, h));
+        const slY = clampY(this.priceToY(f.projSL, h));
+        const entryY = clampY(curY);
+
+        ctx.save();
+        // Vertical projection origin divider
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(lastCandleX, plotTop);
+        ctx.lineTo(lastCandleX, plotBot);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Shaded TP Reward Zone & SL Risk Zone
+        ctx.fillStyle = isReady ? 'rgba(16, 185, 129, 0.14)' : 'rgba(16, 185, 129, 0.07)';
+        ctx.fillRect(xStart, Math.min(entryY, tpY), laneW, Math.max(2, Math.abs(tpY - entryY)));
+        ctx.fillStyle = isReady ? 'rgba(255, 59, 107, 0.13)' : 'rgba(255, 59, 107, 0.06)';
+        ctx.fillRect(xStart, Math.min(entryY, slY), laneW, Math.max(2, Math.abs(slY - entryY)));
+
+        // Dashed TP & SL boundary lines across future lane
+        ctx.strokeStyle = isReady ? 'rgba(52, 211, 153, 0.85)' : 'rgba(52, 211, 153, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(xStart, tpY);
+        ctx.lineTo(xEnd, tpY);
+        ctx.stroke();
+
+        ctx.strokeStyle = isReady ? 'rgba(255, 59, 107, 0.85)' : 'rgba(255, 59, 107, 0.45)';
+        ctx.beginPath();
+        ctx.moveTo(xStart, slY);
+        ctx.lineTo(xEnd, slY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Compact TP / SL % tags inside the future lane
+        ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#6ee7b7';
+        const tpTagY = tpY <= plotTop + 10 ? tpY + 10 : tpY - 3;
+        ctx.fillText(`TP +${f.tpPct.toFixed(1)}%`, xStart + 3, tpTagY);
+
+        ctx.fillStyle = '#fda4af';
+        const slTagY = slY >= plotBot - 6 ? slY - 4 : slY + 10;
+        ctx.fillText(`SL -${f.slPct.toFixed(1)}%`, xStart + 3, slTagY);
+
+        // Curved predicted trajectory arrow from current candle toward projected target
+        const arrowEndX = xEnd - 6;
+        const arrowEndY = tpY + (entryY - tpY) * 0.18;
+        const cpX = lastCandleX + laneW * 0.45;
+        const cpY = entryY + (arrowEndY - entryY) * 0.22;
+
+        ctx.strokeStyle = mainCol;
+        ctx.lineWidth = isReady ? 2.1 : 1.5;
+        ctx.globalAlpha = isReady ? 0.95 : 0.65;
+        if (isReady) {
+          ctx.setLineDash([5, 3]);
+          ctx.lineDashOffset = -((timeMs || 0) * 0.024) % 16;
+          ctx.shadowColor = mainCol;
+          ctx.shadowBlur = 8;
+        } else {
+          ctx.setLineDash([4, 4]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(lastCandleX, entryY);
+        ctx.quadraticCurveTo(cpX, cpY, arrowEndX, arrowEndY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+
+        // Arrowhead aligned with tangent at end of curve
+        const ang = Math.atan2(arrowEndY - cpY, arrowEndX - cpX);
+        const headLen = isReady ? 6.5 : 5;
+        ctx.fillStyle = mainCol;
+        ctx.beginPath();
+        ctx.moveTo(arrowEndX, arrowEndY);
+        ctx.lineTo(arrowEndX - headLen * Math.cos(ang - 0.45), arrowEndY - headLen * Math.sin(ang - 0.45));
+        ctx.lineTo(arrowEndX - headLen * Math.cos(ang + 0.45), arrowEndY - headLen * Math.sin(ang + 0.45));
+        ctx.closePath();
+        ctx.fill();
+
+        // Pulsing origin trigger ring on the latest price point
+        const pulse = 3.5 + (Math.sin((timeMs || 0) * 0.006) + 1) * (isReady ? 2.2 : 1.0);
+        ctx.strokeStyle = mainCol;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(lastCandleX, entryY, pulse, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 2. Clean top-left AI Forecast Pill Banner
+      let pillText = '';
+      let pillColor = '#94a3b8';
+      let pillBorder = 'rgba(148, 163, 184, 0.4)';
+      if (symPos.length > 0) {
+        pillText = `✅ ĐANG GIỮ ${symPos[0].side} • THEO DÕI SL/TP`;
+        pillColor = '#38bdf8';
+        pillBorder = 'rgba(56, 189, 248, 0.55)';
+      } else if (f.status === 'READY' && f.dirSide) {
+        pillText = `⚡ SẮP VÀO ${f.dirSide} (${f.sig.confidence}%) • XN ${f.streak}/3 • TP +${f.tpPct.toFixed(1)}% / SL -${f.slPct.toFixed(1)}%`;
+        pillColor = f.dirSide === 'LONG' ? '#34d399' : '#ff3b6b';
+        pillBorder = f.dirSide === 'LONG' ? 'rgba(52, 211, 153, 0.65)' : 'rgba(255, 59, 107, 0.65)';
+      } else if (f.status === 'FORMING' && f.dirSide) {
+        pillText = `🔮 DỰ ĐOÁN ${f.dirSide} (${f.sig.confidence}%) • Điểm ${f.absScore}/${f.reqScore}`;
+        pillColor = '#fbbf24';
+        pillBorder = 'rgba(251, 191, 36, 0.55)';
+      } else {
+        let waitReason = 'Chờ điểm hội tụ';
+        if (f.sig.spikeBlocked) waitReason = 'Lọc nến giật';
+        else if (String(f.sig.reasons || '').includes('Chờ hồi')) waitReason = 'Chờ hồi giá';
+        else if (String(f.sig.reasons || '').includes('NGƯỢC')) waitReason = 'Ngược khung 5m';
+        pillText = `🛡 AI ĐỨNG NGOÀI • ${waitReason}`;
+        pillColor = '#94a3b8';
+        pillBorder = 'rgba(148, 163, 184, 0.35)';
+      }
+
+      ctx.save();
+      const fontSize = w < 460 ? 8.5 : 9.5;
+      ctx.font = `700 ${fontSize}px "JetBrains Mono", monospace`;
+      const maxPillW = Math.max(80, (w - this.pad.left - this.pad.right) - 10);
+      let drawText = pillText;
+      while (ctx.measureText(drawText).width + 14 > maxPillW && drawText.length > 18) {
+        drawText = drawText.slice(0, -4) + '...';
+      }
+      const pw = Math.min(maxPillW, ctx.measureText(drawText).width + 14);
+      const ph = 17;
+      const px = this.pad.left + 4;
+      const py = this.pad.top + 3;
+
+      this._drawRoundedRect(ctx, px, py, pw, ph, 4);
+      ctx.fillStyle = 'rgba(6, 10, 18, 0.88)';
+      ctx.fill();
+      ctx.strokeStyle = pillBorder;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = pillColor;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(drawText, px + 7, py + ph * 0.54);
       ctx.restore();
     }
   }
