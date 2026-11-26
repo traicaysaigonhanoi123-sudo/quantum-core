@@ -628,15 +628,31 @@ test('Adaptive computeCapitalPlan across 5 tiers & 3 risk modes, Quarter-Kelly d
     [50000, 'FUND']
   ];
   for (const [eq, expectedTier] of tiers) {
-    for (const rmode of ['SAFE', 'BALANCED', 'AGGRESSIVE']) {
+    for (const rmode of ['SAFE', 'BALANCED', 'AGGRESSIVE', 'HIGH_RISK']) {
       const p = trading.computeCapitalPlan(eq, rmode);
       assert.equal(p.tier, expectedTier);
       assert.equal(p.riskMode, rmode);
+      if (rmode === 'HIGH_RISK') assert.ok(p.maxSafeLeverage >= 10);
       assert.ok(p.optimalSizeUsd >= 5, `Invalid sizeUsd for $${eq} ${rmode}`);
       assert.ok(p.riskPerTradeUsd > 0 && p.dailyStopLossUsd > 0 && p.dailyProfitLockUsd > 0);
       assert.ok(p.minTpPct > 0.5);
     }
   }
+
+  // HIGH_RISK leverage selection (10x - 50x) + state persistence
+  trading.setCapital(100);
+  const hr10 = trading.setRiskMode('HIGH_RISK');
+  assert.equal(hr10.maxSafeLeverage, 10);
+  const hr25 = trading.setHighRiskLeverage(25);
+  assert.equal(hr25.maxSafeLeverage, 25);
+  const hrSnap = trading.exportState();
+  assert.equal(hrSnap.riskMode, 'HIGH_RISK');
+  assert.equal(hrSnap.highRiskLeverage, 25);
+  const tradingRestore = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas });
+  tradingRestore.importState(hrSnap);
+  assert.equal(tradingRestore.riskMode, 'HIGH_RISK');
+  assert.equal(tradingRestore.highRiskLeverage, 25);
+  assert.equal(tradingRestore.computeCapitalPlan().maxSafeLeverage, 25);
 
   // 2. Verify exact $100 targets (SAFE +$6, BALANCED +$10, AGGRESSIVE +$20) and proportional scaling for $250-$10K+
   const pSafe = trading.computeCapitalPlan(100, 'SAFE');

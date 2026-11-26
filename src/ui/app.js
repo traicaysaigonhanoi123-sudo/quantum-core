@@ -78,6 +78,19 @@
     document.querySelectorAll('.ex-pill').forEach((p) => {
       p.classList.toggle('active', p.dataset.exchange === market.activeExchange);
     });
+    const hrRow = $('highRiskLevRow');
+    if (hrRow) {
+      hrRow.classList.toggle('hidden', trading.riskMode !== 'HIGH_RISK');
+      hrRow.querySelectorAll('.hrlev-btn').forEach((btn) => {
+        btn.classList.toggle('active', Number(btn.dataset.hrlev) === (trading.highRiskLeverage || 10));
+      });
+    }
+    const levEl = $('selLeverage');
+    const restoredPlan = trading.getCapitalProfile();
+    if (levEl && restoredPlan) {
+      const optExists = Array.from(levEl.options).some((o) => Number(o.value) === restoredPlan.maxSafeLeverage);
+      if (optExists) levEl.value = String(restoredPlan.maxSafeLeverage);
+    }
     const setChk = (id, val) => { const el = $(id); if (el) el.checked = Boolean(val); };
     setChk('chkDailyProfitLock', trading.dailyProfitLockEnabled);
     setChk('chkMtfFilter', market.mtfFilterEnabled);
@@ -468,6 +481,13 @@
       document.querySelectorAll('#riskModeGroup .rmode-btn').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.rmode === trading.riskMode);
       });
+      const hrRow = $('highRiskLevRow');
+      if (hrRow) {
+        hrRow.classList.toggle('hidden', trading.riskMode !== 'HIGH_RISK');
+        hrRow.querySelectorAll('.hrlev-btn').forEach((btn) => {
+          btn.classList.toggle('active', Number(btn.dataset.hrlev) === (trading.highRiskLeverage || 10));
+        });
+      }
     }
 
     $('cntPos').textContent = positions.length;
@@ -1450,6 +1470,7 @@
       syncAutoSize();
       updateSLTPPreview();
       renderTradingPanels();
+      savePersistedState(true);
     };
 
     const riskModeGroup = $('riskModeGroup');
@@ -1458,6 +1479,30 @@
         const btn = e.target.closest('.rmode-btn');
         if (!btn) return;
         applyRiskMode(btn.dataset.rmode);
+      });
+    }
+
+    const highRiskLevRow = $('highRiskLevRow');
+    if (highRiskLevRow) {
+      highRiskLevRow.addEventListener('click', (e) => {
+        const btn = e.target.closest('.hrlev-btn');
+        if (!btn) return;
+        const lev = Math.max(10, parseInt(btn.dataset.hrlev, 10) || 10);
+        const plan = trading.setHighRiskLeverage(lev);
+        const levEl = $('selLeverage');
+        if (levEl) {
+          const optExists = Array.from(levEl.options).some((o) => Number(o.value) === lev);
+          if (optExists) levEl.value = String(lev);
+        }
+        syncAutoSize();
+        updateSLTPPreview();
+        renderTradingPanels();
+        savePersistedState(true);
+        showToast({
+          type: 'neg',
+          title: `🔥 ĐÒN BẨY MẠO HIỂM: ${lev}x`,
+          msg: `Size tối ưu ~$${plan.optimalSizeUsd} • Rủi ro ${plan.riskPerTradePct}% ($${plan.riskPerTradeUsd.toFixed(2)}/lệnh).`
+        });
       });
     }
 
@@ -1972,6 +2017,7 @@
         { label: 'Chế độ rủi ro: 🛡 AN TOÀN (SAFE)', category: 'CAPITAL', run: () => trading.setRiskMode('SAFE') },
         { label: 'Chế độ rủi ro: ⚖️ CÂN BẰNG (BALANCED)', category: 'CAPITAL', run: () => trading.setRiskMode('BALANCED') },
         { label: 'Chế độ rủi ro: 🚀 SĂN MỤC TIÊU (AGGRESSIVE)', category: 'CAPITAL', run: () => trading.setRiskMode('AGGRESSIVE') },
+        { label: 'Chế độ rủi ro: 🔥 MẠO HIỂM 10x+ (HIGH_RISK)', category: 'CAPITAL', run: () => trading.setRiskMode('HIGH_RISK') },
         { label: '🔓 Mở khóa Daily Profit Lock (chạy phiên mới)', category: 'CAPITAL', run: () => trading.unlockDailyProfitLock(true) },
         { label: 'Bật / Tắt dữ liệu giá Live WebSocket', category: 'FEED', run: () => market.toggleLiveWebSocket(!market.wsEnabled) },
         { label: 'Mở Cửa Sổ Kết Nối Live API / Ví DEX (2FA)', category: 'SECURITY', run: openApiModal },

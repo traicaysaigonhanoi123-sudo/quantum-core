@@ -64,7 +64,8 @@
       this._lastBotEntryTick = -999;
 
       // Adaptive Capital Plan & Daily Profit Lock
-      this.riskMode = 'BALANCED'; // 'SAFE' | 'BALANCED' | 'AGGRESSIVE'
+      this.riskMode = 'BALANCED'; // 'SAFE' | 'BALANCED' | 'AGGRESSIVE' | 'HIGH_RISK'
+      this.highRiskLeverage = 10;
       this.dailyProfitLockEnabled = true;
       this.dailyProfitLocked = false;
       this.dailyProfitLockReason = '';
@@ -143,7 +144,7 @@
 
     computeCapitalPlan(equityOverride, riskModeOverride, marketCtx = {}) {
       const eq = Math.max(0, Number.isFinite(equityOverride) ? equityOverride : (this.balance || this.initialCapital));
-      const mode = ['SAFE', 'BALANCED', 'AGGRESSIVE'].includes(riskModeOverride) ? riskModeOverride : this.riskMode;
+      const mode = ['SAFE', 'BALANCED', 'AGGRESSIVE', 'HIGH_RISK'].includes(riskModeOverride) ? riskModeOverride : this.riskMode;
 
       let base;
       if (eq < 10) {
@@ -280,6 +281,25 @@
         minNetRR = ov.minNetRR;
         tpMultiplier = ov.tpMultiplier;
         riskModeLabel = 'SĂN MỤC TIÊU';
+      } else if (mode === 'HIGH_RISK') {
+        const hrLev = Math.max(10, Math.min(50, Math.round(Number(this.highRiskLeverage) || 10)));
+        const hrMap = {
+          INSUFFICIENT: { riskPerTradePct: 3.5, maxDrawdownPct: 12.0, dailyProfitLockPct: 35.0, minSignalScore: 35, minNetRR: 2.0, tpMultiplier: 2.5 },
+          MICRO: { riskPerTradePct: 3.5, maxDrawdownPct: 12.0, dailyProfitLockPct: 36.0, minSignalScore: 35, minNetRR: 2.0, tpMultiplier: 2.5 },
+          SMALL: { riskPerTradePct: 3.5, maxDrawdownPct: 12.0, dailyProfitLockPct: 35.0, minSignalScore: 34, minNetRR: 2.1, tpMultiplier: 2.5 },
+          GROWTH: { riskPerTradePct: 2.4, maxDrawdownPct: 9.0, dailyProfitLockPct: 28.0, minSignalScore: 33, minNetRR: 2.0, tpMultiplier: 2.45 },
+          PRO: { riskPerTradePct: 1.6, maxDrawdownPct: 6.5, dailyProfitLockPct: 18.0, minSignalScore: 32, minNetRR: 1.9, tpMultiplier: 2.4 },
+          FUND: { riskPerTradePct: 1.1, maxDrawdownPct: 5.0, dailyProfitLockPct: 12.0, minSignalScore: 32, minNetRR: 1.85, tpMultiplier: 2.35 }
+        };
+        const ov = hrMap[base.tier] || hrMap.FUND;
+        riskPerTradePct = ov.riskPerTradePct;
+        maxSafeLeverage = hrLev;
+        maxDrawdownPct = ov.maxDrawdownPct;
+        dailyProfitLockPct = ov.dailyProfitLockPct;
+        minSignalScore = ov.minSignalScore;
+        minNetRR = ov.minNetRR;
+        tpMultiplier = ov.tpMultiplier;
+        riskModeLabel = `MẠO HIỂM ${hrLev}x`;
       }
 
       // Adaptive Quarter-Kelly drawdown damper when sample size >= 10 closed trades
@@ -384,16 +404,28 @@
 
     setRiskMode(mode) {
       const normalized = String(mode || '').toUpperCase();
-      if (!['SAFE', 'BALANCED', 'AGGRESSIVE'].includes(normalized)) return this.computeCapitalPlan();
+      if (!['SAFE', 'BALANCED', 'AGGRESSIVE', 'HIGH_RISK'].includes(normalized)) return this.computeCapitalPlan();
       this.riskMode = normalized;
       const eq = this.positions.length > 0 ? this.getMetrics().equity : (this.balance || this.initialCapital);
       const plan = this._syncRiskToCapitalProfile(eq);
       this._log('SHIELD', `Chuyển chế độ rủi ro [${plan.riskModeLabel}]: Risk ${plan.riskPerTradePct}% ($${plan.riskPerTradeUsd}/lệnh), Đòn bẩy max ${plan.maxSafeLeverage}x, Khóa lãi ngày +$${plan.dailyProfitLockUsd.toFixed(2)} / Cắt lỗ ngày -$${plan.dailyStopLossUsd.toFixed(2)}.`);
       this._emit('toast', {
-        type: normalized === 'AGGRESSIVE' ? 'gold' : 'cyan',
+        type: normalized === 'HIGH_RISK' ? 'neg' : (normalized === 'AGGRESSIVE' ? 'gold' : 'cyan'),
         title: `CHẾ ĐỘ RỦI RO: ${plan.riskModeLabel}`,
         msg: `Risk ${plan.riskPerTradePct}%/lệnh (${plan.maxSafeLeverage}x) • Mục tiêu +$${plan.dailyProfitLockUsd.toFixed(2)} / Cắt lỗ -$${plan.dailyStopLossUsd.toFixed(2)}`
       });
+      this._emit('updated');
+      return plan;
+    }
+
+    setHighRiskLeverage(lev) {
+      const clamped = Math.max(10, Math.min(50, Math.round(Number(lev) || 10)));
+      this.highRiskLeverage = clamped;
+      const eq = this.positions.length > 0 ? this.getMetrics().equity : (this.balance || this.initialCapital);
+      const plan = this.riskMode === 'HIGH_RISK'
+        ? this._syncRiskToCapitalProfile(eq)
+        : this.computeCapitalPlan(eq, 'HIGH_RISK');
+      this._log('SHIELD', `🔥 Đặt đòn bẩy Mạo hiểm: ${clamped}x (Margin cap ${(plan.marginUsageCap * 100).toFixed(0)}%, Max Size $${plan.optimalSizeUsd}).`);
       this._emit('updated');
       return plan;
     }
@@ -472,6 +504,7 @@
         dailyProfitLockReason: this.dailyProfitLockReason || '',
         dailyProfitLockEnabled: Boolean(this.dailyProfitLockEnabled),
         riskMode: this.riskMode || 'BALANCED',
+        highRiskLeverage: this.highRiskLeverage || 10,
         botRunning: Boolean(this.botRunning),
         botStrategy: this.botStrategy || 'MOMENTUM',
         botDirectionMode: this.botDirectionMode || 'AUTO',
@@ -514,7 +547,9 @@
       this.dailyProfitLocked = Boolean(snap.dailyProfitLocked);
       this.dailyProfitLockReason = typeof snap.dailyProfitLockReason === 'string' ? snap.dailyProfitLockReason : '';
       this.dailyProfitLockEnabled = snap.dailyProfitLockEnabled !== undefined ? Boolean(snap.dailyProfitLockEnabled) : true;
-      this.riskMode = ['SAFE', 'BALANCED', 'AGGRESSIVE'].includes(snap.riskMode) ? snap.riskMode : 'BALANCED';
+      this.riskMode = ['SAFE', 'BALANCED', 'AGGRESSIVE', 'HIGH_RISK'].includes(snap.riskMode) ? snap.riskMode : 'BALANCED';
+      const savedHrLev = Number(snap.highRiskLeverage);
+      this.highRiskLeverage = Number.isFinite(savedHrLev) ? Math.max(10, Math.min(50, Math.round(savedHrLev))) : 10;
       this.botRunning = Boolean(snap.botRunning);
       this.botStrategy = typeof snap.botStrategy === 'string' ? snap.botStrategy : 'MOMENTUM';
       this.botDirectionMode = ['AUTO', 'LONG_ONLY', 'SHORT_ONLY', 'HEDGE'].includes(snap.botDirectionMode)
