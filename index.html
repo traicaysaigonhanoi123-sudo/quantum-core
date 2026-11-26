@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QUANTUM CORE // Multi-Exchange Quant & Orderflow Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="src/styles/terminal.css" />
+</head>
+<body>
+  <!-- Background Ambient Grid -->
+  <div class="bg-grid-overlay" aria-hidden="true"></div>
+  <div class="shock-vignette" id="shockVignette" aria-hidden="true"></div>
+
+  <!-- Circuit Breaker Alert Banner -->
+  <div class="breaker-banner hidden" id="breakerBanner" role="alert">
+    <div class="breaker-banner-left">
+      <span class="breaker-badge">CIRCUIT BREAKER TRIPPED</span>
+      <span class="breaker-reason" id="breakerReason">Phát hiện sốc biến động vượt ngưỡng an toàn — Bot đã tạm dừng &amp; hủy lệnh chờ bảo vệ tài khoản.</span>
+    </div>
+    <div class="breaker-banner-actions">
+      <button class="btn btn-sm btn-warning" id="btnResetBreaker">Mở Khóa &amp; Reset Hệ Thống</button>
+    </div>
+  </div>
+
+  <!-- Top HUD Navigation Bar -->
+  <header class="hud-topbar">
+    <div class="topbar-brand">
+      <div class="brand-logo" aria-hidden="true">
+        <span class="logo-core"></span>
+        <span class="logo-ring"></span>
+      </div>
+      <div class="brand-text">
+        <div class="brand-title">QUANTUM CORE <span class="brand-sep">//</span> <span class="brand-sub">QUANT TERMINAL</span></div>
+        <div class="brand-meta">
+          <span class="status-dot live" id="feedDot"></span>
+          <span id="feedStatusText">MULTI-VENUE SYNTH + WS</span>
+          <span class="meta-divider">|</span>
+          <span>ZERO-TRUST</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instrument Selector (Dynamically populated per active exchange) -->
+    <div class="topbar-instruments" id="instrumentSelector">
+      <button class="inst-btn active" data-symbol="BTC-PERP">
+        <span class="inst-sym">BTC</span>
+        <span class="inst-px" id="hdrPxBTC">58,585.0</span>
+        <span class="inst-chg neg" id="hdrChgBTC">-2.70%</span>
+      </button>
+      <button class="inst-btn" data-symbol="ETH-PERP">
+        <span class="inst-sym">ETH</span>
+        <span class="inst-px" id="hdrPxETH">1,642.40</span>
+        <span class="inst-chg neg" id="hdrChgETH">-3.17%</span>
+      </button>
+      <button class="inst-btn" data-symbol="SOL-PERP">
+        <span class="inst-sym">SOL</span>
+        <span class="inst-px" id="hdrPxSOL">67.88</span>
+        <span class="inst-chg neg" id="hdrChgSOL">-3.80%</span>
+      </button>
+      <button class="inst-btn" data-symbol="HYPE-PERP">
+        <span class="inst-sym">HYPE</span>
+        <span class="inst-px" id="hdrPxHYPE">58.120</span>
+        <span class="inst-chg neg" id="hdrChgHYPE">-7.31%</span>
+      </button>
+    </div>
+    <button type="button" class="btn btn-xs btn-cyan-outline coin-picker-btn" id="btnOpenCoinPicker" title="Mở toàn bộ danh sách coin trực tiếp theo từng sàn">
+      ☰ COIN (<span id="coinCatalogCount">7</span>)
+    </button>
+
+    <!-- Mode & Account Quick Telemetry -->
+    <div class="topbar-right">
+      <div class="mode-switch" role="group" aria-label="Trading Mode">
+        <button class="mode-btn active" id="btnModeDemo" data-mode="DEMO">
+          <span class="mode-dot demo"></span> DEMO $100
+        </button>
+        <button class="mode-btn" id="btnModeLive" data-mode="LIVE">
+          <span class="mode-dot live"></span> LIVE
+        </button>
+      </div>
+
+      <button class="btn btn-xs btn-cyan" id="btnTopbarBot" title="Bật / Tắt Bot tự động chạy">
+        ▶ BOT AUTO
+      </button>
+
+      <button class="btn btn-xs btn-cyan-outline" id="btnToggleWs" title="Bật/tắt dữ liệu giá WebSocket thực từ Binance/Hyperliquid">
+        <span class="ws-indicator" id="wsIndicator"></span> WS: OFF
+      </button>
+
+      <button class="btn btn-xs btn-ghost" id="btnOpenApiModal">
+        API / DEX
+      </button>
+
+      <button class="btn btn-xs btn-ghost" id="btnCmdPalette" title="Mở Command Palette (Ctrl+K / Cmd+K)">
+        ⌘K
+      </button>
+
+      <div class="hud-clock">
+        <span class="clock-time" id="utcClock">00:00:00</span>
+        <span class="clock-zone">UTC</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Exchange Filter Strip -->
+  <div class="exchange-strip">
+    <div class="exchange-pills" id="exchangePills">
+      <button class="ex-pill active" data-exchange="ALL">
+        <span class="ex-dot all"></span> ALL <span class="ex-lat">4ms</span>
+      </button>
+      <button class="ex-pill" data-exchange="HYPERLIQUID">
+        <span class="ex-dot hl"></span> HYPERLIQUID <span class="ex-lat" id="latHL">11ms</span>
+      </button>
+      <button class="ex-pill" data-exchange="BINANCE">
+        <span class="ex-dot bn"></span> BINANCE <span class="ex-lat" id="latBN">14ms</span>
+      </button>
+      <button class="ex-pill" data-exchange="BYBIT">
+        <span class="ex-dot bb"></span> BYBIT <span class="ex-lat" id="latBB">18ms</span>
+      </button>
+      <button class="ex-pill" data-exchange="OKX">
+        <span class="ex-dot okx"></span> OKX <span class="ex-lat" id="latOKX">21ms</span>
+      </button>
+      <button class="ex-pill" data-exchange="DERIBIT">
+        <span class="ex-dot db"></span> DERIBIT <span class="ex-lat" id="latDB">24ms</span>
+      </button>
+    </div>
+    <div class="strip-telemetry">
+      <div class="strip-metric">
+        <span class="sm-label">MARK</span>
+        <span class="sm-val cyan" id="stripMark">$94,280.50</span>
+      </div>
+      <div class="strip-metric">
+        <span class="sm-label">FUND 8H</span>
+        <span class="sm-val pos" id="stripFunding">+0.0112%</span>
+      </div>
+      <div class="strip-metric">
+        <span class="sm-label">OI</span>
+        <span class="sm-val gold" id="stripOI">$18.42B</span>
+      </div>
+      <div class="strip-metric">
+        <span class="sm-label">SPREAD</span>
+        <span class="sm-val" id="stripSpread">1.4 bps</span>
+      </div>
+      <div class="strip-metric">
+        <span class="sm-label">BREAKER</span>
+        <span class="sm-val armed" id="stripBreaker">ARMED ●</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Quant Workspace Grid -->
+  <main class="terminal-grid">
+    <!-- ==================== LEFT COLUMN ==================== -->
+    <aside class="col-left">
+      <section class="panel kpi-panel">
+        <div class="panel-hdr">
+          <span class="panel-title">EQUITY &amp; ORDERFLOW TELEMETRY</span>
+          <span class="panel-tag" id="walletModeTag">DEMO USDC</span>
+        </div>
+        <div class="kpi-main">
+          <div class="kpi-equity-wrap">
+            <div class="kpi-label">TỔNG TÀI SẢN (EQUITY)</div>
+            <div class="kpi-big-num" id="kpiEquity">$100.00</div>
+            <div class="kpi-sub-row">
+              <span class="kpi-pnl pos" id="kpiUnrealized">uPnL: +$0.00 (0.00%)</span>
+              <span class="kpi-dd" id="kpiDrawdown">DD: 0.00%</span>
+            </div>
+          </div>
+          <canvas id="kpiSparkCanvas" class="kpi-spark"></canvas>
+        </div>
+        <div class="kpi-stats-grid">
+          <div class="mini-stat">
+            <span class="ms-lbl">VỐN KHẢ DỤNG</span>
+            <span class="ms-val" id="kpiFreeMargin">$100.00</span>
+          </div>
+          <div class="mini-stat">
+            <span class="ms-lbl">LÃI ĐÃ CHỐT</span>
+            <span class="ms-val pos" id="kpiRealized">+$0.00</span>
+          </div>
+          <div class="mini-stat">
+            <span class="ms-lbl">WIN RATE</span>
+            <span class="ms-val cyan" id="kpiWinRate">0.0% (0/0)</span>
+          </div>
+          <div class="mini-stat">
+            <span class="ms-lbl">ORDERFLOW IDX</span>
+            <span class="ms-val gold" id="kpiFlowIdx">1,290</span>
+          </div>
+        </div>
+        <div class="capital-bar" id="capitalPresetBar">
+          <div class="cap-top-row" id="capDemoRow">
+            <span class="cap-lbl">VỐN TK:</span>
+            <div class="cap-presets" id="capPresets">
+              <button type="button" class="cap-btn active" data-cap="100">$100</button>
+              <button type="button" class="cap-btn" data-cap="250">$250</button>
+              <button type="button" class="cap-btn" data-cap="500">$500</button>
+              <button type="button" class="cap-btn" data-cap="1000">$1K</button>
+              <button type="button" class="cap-btn" data-cap="10000">$10K</button>
+              <button type="button" class="cap-btn" data-cap="100000">$100K</button>
+            </div>
+            <input type="number" id="inpCustomCapital" class="cap-inp" min="10" step="10" placeholder="$100+" title="Nhập số vốn Demo ($10 trở lên, khuyên dùng từ $100)" />
+            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnApplyCapital">Đặt</button>
+          </div>
+          <div class="cap-live-row hidden" id="capLiveRow">
+            <span class="cap-live-lbl" id="capLiveVenueLbl">🟢 VÍ THỰC: --</span>
+            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnSyncRealBalance">🔄 Đồng bộ</button>
+          </div>
+          <div class="cap-guide-row">
+            <span class="cap-tier-badge small" id="capitalTierBadge">GROWTH ($100–$1K)</span>
+            <span class="cap-guide-txt" id="capitalTierGuide">Tối đa 2 lệnh • 3x-5x • Rủi ro 1.0%/lệnh</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Unified Execution Deck: Tabbed Bot Auto & Manual Click-Chart Order -->
+      <section class="panel exec-deck-panel">
+        <div class="deck-tabs" id="leftDeckTabs" role="tablist">
+          <button type="button" class="deck-tab active" data-dtab="bot" role="tab" aria-selected="true">🤖 BOT TỰ ĐỘNG</button>
+          <button type="button" class="deck-tab" data-dtab="manual" role="tab" aria-selected="false">✋ ĐẶT LỆNH TAY</button>
+        </div>
+
+        <div class="deck-pane active" id="botPanel">
+          <div class="deck-subhdr">
+            <span class="panel-title">AUTO ENGINE &amp; CIRCUIT BREAKER</span>
+            <span class="bot-state-pill idle" id="botStatePill">IDLE</span>
+          </div>
+
+          <div class="bot-btn-row">
+            <button class="btn btn-cyan" id="btnToggleBot">▶ BẬT BOT TỰ CHẠY (AUTO)</button>
+            <button class="btn btn-xs btn-ghost" id="btnResetDemo" title="Reset ví demo về vốn hiện tại">Reset $100</button>
+          </div>
+
+          <!-- Bot Direction Selector + Live AI Signal Meter -->
+          <div class="bot-dir-box">
+            <div class="bot-dir-lbl">CHẾ ĐỘ BOT CHỌN HƯỚNG LỆNH:</div>
+            <div class="bot-dir-btns" id="botDirGroup" role="group" aria-label="Chế độ Bot chọn hướng lệnh">
+              <button type="button" class="bdir-btn active" data-dir="AUTO">🤖 AUTO L/S</button>
+              <button type="button" class="bdir-btn" data-dir="LONG_ONLY">🟢 CHỈ LONG</button>
+              <button type="button" class="bdir-btn" data-dir="SHORT_ONLY">🔴 CHỈ SHORT</button>
+              <button type="button" class="bdir-btn" data-dir="HEDGE">⚖️ HEDGE</button>
+            </div>
+            <div class="bot-signal-bar" id="botSignalBar">
+              <span class="bsig-text" id="botSignalText">🤖 AI: Đang quét tín hiệu...</span>
+              <button type="button" class="btn btn-xs btn-cyan-outline" id="btnAiQuickTrade">⚡ AI Vào Lệnh</button>
+            </div>
+          </div>
+
+          <!-- Adaptive Capital Plan + Risk Mode + Daily Profit Lock -->
+          <div class="capital-plan-box" id="capitalPlanBox">
+            <div class="plan-hdr-row">
+              <span class="bot-dir-lbl">KẾ HOẠCH VỐN &amp; KHÓA LÃI NGÀY</span>
+              <span class="plan-prog-badge" id="dailyPnlProgressBadge">+$0.00 / +$10.00</span>
+            </div>
+            <div class="risk-mode-btns" id="riskModeGroup" role="group" aria-label="Chế độ rủi ro theo số vốn">
+              <button type="button" class="rmode-btn" data-rmode="SAFE">🛡 AN TOÀN</button>
+              <button type="button" class="rmode-btn active" data-rmode="BALANCED">⚖️ CÂN BẰNG</button>
+              <button type="button" class="rmode-btn aggressive" data-rmode="AGGRESSIVE">🚀 SĂN MỤC TIÊU</button>
+            </div>
+            <div class="plan-stats-grid" id="capitalPlanSummary">
+              <div class="plan-stat">
+                <span>RISK/LỆNH</span>
+                <strong id="planRiskVal">$1.00 (1.0%)</strong>
+              </div>
+              <div class="plan-stat">
+                <span>SIZE / LEV</span>
+                <strong class="cyan" id="planSizeVal">$120 • 5x</strong>
+              </div>
+              <div class="plan-stat">
+                <span>CHỐT NGÀY</span>
+                <strong class="pos" id="planTargetVal">+$10.00</strong>
+              </div>
+              <div class="plan-stat">
+                <span>CẮT LỖ NGÀY</span>
+                <strong class="neg" id="planStopVal">-$3.00</strong>
+              </div>
+            </div>
+            <div class="plan-lock-row">
+              <label class="toggle-inline">
+                <input type="checkbox" id="chkDailyProfitLock" checked />
+                <span>🎯 Tự khóa lãi &amp; dừng Bot khi đạt mục tiêu</span>
+              </label>
+              <label class="toggle-inline">
+                <input type="checkbox" id="chkMtfFilter" checked />
+                <span>📊 Lọc đồng thuận khung 5m (chống ngược trend)</span>
+              </label>
+              <label class="toggle-inline">
+                <input type="checkbox" id="chkNewsSpikeFilter" checked />
+                <span>⚡ Lọc nến giật tin / quét râu bất thường</span>
+              </label>
+              <button type="button" class="btn btn-xs btn-warning hidden" id="btnUnlockProfitLock">🔓 Mở Khóa Chạy Tiếp</button>
+            </div>
+          </div>
+
+          <div class="bot-strategies" id="botStrategies">
+            <label class="strat-item active">
+              <input type="radio" name="botStrategy" value="MOMENTUM" checked />
+              <div class="strat-info">
+                <div class="strat-name">Auto Trend &amp; Orderflow <span class="arb-badge">TỰ CHỌN L/S</span></div>
+                <div class="strat-desc">AI đọc EMA + RSI + Orderbook + CVD tự chọn Long/Short</div>
+              </div>
+            </label>
+            <label class="strat-item">
+              <input type="radio" name="botStrategy" value="DELTA_ARB" />
+              <div class="strat-info">
+                <div class="strat-name">Delta-Neutral Funding Arb <span class="arb-badge">AN TOÀN</span></div>
+                <div class="strat-desc">Long sàn rẻ + Short sàn đắt 2x ăn Funding</div>
+              </div>
+            </label>
+            <label class="strat-item">
+              <input type="radio" name="botStrategy" value="GRID" />
+              <div class="strat-info">
+                <div class="strat-name">Grid Market Maker</div>
+                <div class="strat-desc">Rải lưới Limit 2 chiều ăn chênh lệch spread</div>
+              </div>
+            </label>
+            <label class="strat-item">
+              <input type="radio" name="botStrategy" value="STAT_ARB" />
+              <div class="strat-info">
+                <div class="strat-name">Cross-Exchange Stat-Arb</div>
+                <div class="strat-desc">Khai thác lệch giá Hyperliquid ↔ Binance</div>
+              </div>
+            </label>
+            <label class="strat-item">
+              <input type="radio" name="botStrategy" value="MEAN_REV" />
+              <div class="strat-info">
+                <div class="strat-name">VWAP Mean Reversion</div>
+                <div class="strat-desc">Đánh đảo chiều Z-Score quá mua / quá bán</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="breaker-config">
+            <div class="bc-row">
+              <span>Circuit Breaker (DD / Shock):</span>
+              <strong class="gold" id="breakerThresholdLabel">2.0% Daily DD / 2.2σ</strong>
+            </div>
+            <div class="bc-controls">
+              <label class="toggle-inline">
+                <input type="checkbox" id="chkAutoFlatten" checked />
+                <span>Tự đóng vị thế rủi ro khi ngắt mạch</span>
+              </label>
+            </div>
+          </div>
+
+          <button class="btn btn-shock" id="btnTriggerShock">
+            <span class="shock-icon">⚡</span>
+            <span>TEST SỐC BIẾN ĐỘNG (FLASH CRASH)</span>
+          </button>
+        </div>
+
+        <div class="deck-pane" id="ticketPanel">
+          <div class="deck-subhdr">
+            <span class="panel-title">ĐẶT LỆNH TAY &amp; CLICK BIỂU ĐỒ</span>
+            <span class="panel-tag cyan" id="chartClickBadge">CLICK CHART: LONG</span>
+          </div>
+          <div class="side-toggle">
+            <button class="side-btn long active" id="btnSideLong">LONG / MUA</button>
+            <button class="side-btn short" id="btnSideShort">SHORT / BÁN</button>
+          </div>
+          <div class="chart-click-bar">
+            <label class="toggle-inline">
+              <input type="checkbox" id="chkChartClick" checked />
+              <span>Click trực tiếp trên nến để đặt Limit + SL/TP</span>
+            </label>
+            <label class="toggle-inline">
+              <input type="checkbox" id="chkConfirmChartClick" checked />
+              <span>Hỏi xác nhận (Có / Không) trước khi vào lệnh từ biểu đồ</span>
+            </label>
+          </div>
+          <div class="shield-box" id="riskShieldBox">
+            <div class="shield-hdr">
+              <span>🛡 RISK SHIELD (+EV &amp; BẢO TOÀN VỐN)</span>
+              <span class="shield-pill">ON</span>
+            </div>
+            <label class="toggle-inline">
+              <input type="checkbox" id="chkAutoSize" checked />
+              <span id="autoSizeRiskLabel">Auto Size (Rủi ro tối đa 1.0% vốn/lệnh)</span>
+            </label>
+            <label class="toggle-inline">
+              <input type="checkbox" id="chkPostOnly" checked />
+              <span>Post-Only Maker (Giảm ~70% phí sàn)</span>
+            </label>
+            <label class="toggle-inline">
+              <input type="checkbox" id="chkAutoBE" checked />
+              <span>Tự dời SL hòa vốn (+0.8R) &amp; Trailing</span>
+            </label>
+          </div>
+          <div class="ticket-form">
+            <div class="form-row-2">
+              <div class="field">
+                <label>GIÁ ENTRY (LIMIT)</label>
+                <input type="number" id="inpEntry" step="0.1" placeholder="Auto / Click nến" />
+              </div>
+              <div class="field">
+                <label>KÍCH THƯỚC (USDC)</label>
+                <input type="number" id="inpSize" value="5000" min="5" step="1" />
+              </div>
+            </div>
+            <div class="form-row-3">
+              <div class="field">
+                <label class="lbl-sl">STOP LOSS (%)</label>
+                <input type="number" id="inpSlPct" value="0.8" min="0.1" max="25" step="0.1" />
+              </div>
+              <div class="field">
+                <label class="lbl-tp">TAKE PROFIT (%)</label>
+                <input type="number" id="inpTpPct" value="1.8" min="0.1" max="100" step="0.1" />
+              </div>
+              <div class="field">
+                <label>ĐÒN BẨY</label>
+                <select id="selLeverage">
+                  <option value="2">2x</option>
+                  <option value="3">3x</option>
+                  <option value="5" selected>5x</option>
+                  <option value="8">8x</option>
+                  <option value="10">10x</option>
+                  <option value="20">20x</option>
+                  <option value="50">50x</option>
+                </select>
+              </div>
+            </div>
+            <div class="rr-preview">
+              <span>SL: <strong class="neg" id="previewSL">--</strong></span>
+              <span>TP: <strong class="pos" id="previewTP">--</strong></span>
+              <span>Net R:R <strong class="gold" id="previewRR">1 : 2.1</strong></span>
+              <span>Risk: <strong class="cyan" id="previewMaxLoss">-$500</strong></span>
+            </div>
+            <div class="ticket-actions">
+              <button class="btn btn-long" id="btnPlaceLimit">ĐẶT LIMIT + SL/TP</button>
+              <button class="btn btn-market" id="btnPlaceMarket">KHỚP MARKET NGAY</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- ==================== CENTER COLUMN ==================== -->
+    <section class="col-center">
+      <div class="center-top-row">
+        <section class="panel chart-panel">
+          <div class="panel-hdr">
+            <div class="chart-hdr-left">
+              <span class="panel-title" id="chartTitle">BTC-PERP // INTERACTIVE ORDERFLOW CANDLESTICK</span>
+              <span class="chart-ohlc" id="chartOhlc">O: -- H: -- L: -- C: --</span>
+            </div>
+            <div class="chart-hdr-right">
+              <div class="tf-group" id="tfGroup">
+                <button class="tf-btn" data-tf="1s">1s</button>
+                <button class="tf-btn" data-tf="5s">5s</button>
+                <button class="tf-btn active" data-tf="1m">1m</button>
+                <button class="tf-btn" data-tf="5m">5m</button>
+              </div>
+              <button type="button" class="btn btn-xs btn-ghost" id="btnResetZoom" title="Đặt lại khung zoom nến">Reset Zoom</button>
+              <span class="chart-hint">Lăn chuột Zoom nến • Click nến đặt Limit</span>
+            </div>
+          </div>
+          <div class="chart-canvas-wrap" id="chartCanvasWrap">
+            <canvas id="candleChartCanvas"></canvas>
+            <div class="chart-tooltip hidden" id="chartTooltip"></div>
+          </div>
+        </section>
+
+        <section class="panel radar-panel">
+          <div class="panel-hdr">
+            <span class="panel-title">VOLATILITY &amp; REGIME RADAR</span>
+            <span class="regime-badge calm" id="regimeBadge">CALM</span>
+          </div>
+          <div class="radar-canvas-wrap">
+            <canvas id="radarCanvas"></canvas>
+          </div>
+          <div class="radar-metrics">
+            <div class="rm-item">
+              <span>REALIZED VOL</span>
+              <strong id="radVol">38.4%</strong>
+            </div>
+            <div class="rm-item">
+              <span>LIQ RISK</span>
+              <strong class="gold" id="radLiqRisk">LOW</strong>
+            </div>
+            <div class="rm-item">
+              <span>SHOCK INDEX</span>
+              <strong class="cyan" id="radShock">0.42σ</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel sphere-hero-panel">
+        <div class="panel-hdr">
+          <div class="sphere-hdr-left">
+            <span class="panel-title">LIQUIDITY &amp; ORDERFLOW RADIAL SPHERE</span>
+            <span class="panel-sub-note">Kéo chuột xoay 3D • Dòng tiền 5 sàn</span>
+          </div>
+          <div class="sphere-legend">
+            <span class="leg-item"><i class="dot gold"></i>Whale / Core</span>
+            <span class="leg-item"><i class="dot cyan"></i>Bid Depth</span>
+            <span class="leg-item"><i class="dot green"></i>Buy Flow</span>
+            <span class="leg-item"><i class="dot red"></i>Sell / Liq</span>
+            <span class="leg-item"><i class="dot violet"></i>Options / Arb</span>
+          </div>
+        </div>
+        <div class="sphere-stage" id="sphereStage">
+          <canvas id="sphereCanvas"></canvas>
+
+          <div class="sphere-hud-overlay">
+            <div class="sh-stat">
+              <span class="sh-lbl">ACTIVE NODES</span>
+              <span class="sh-val cyan" id="sphereNodesCount">312</span>
+            </div>
+            <div class="sh-stat">
+              <span class="sh-lbl">NET FLOW / SEC</span>
+              <span class="sh-val pos" id="sphereNetFlow">+$1.42M</span>
+            </div>
+            <div class="sh-stat">
+              <span class="sh-lbl">WHALE CLUSTER</span>
+              <span class="sh-val gold" id="sphereWhale">HYPERLIQUID</span>
+            </div>
+          </div>
+
+          <div class="venue-cards-stack" id="venueCardsStack"></div>
+        </div>
+      </section>
+
+      <div class="center-bottom-row">
+        <section class="panel blotter-panel">
+          <div class="panel-hdr">
+            <div class="blotter-tabs" id="blotterTabs">
+              <button class="btab active" data-tab="positions">VỊ THẾ <span class="cnt" id="cntPos">0</span></button>
+              <button class="btab" data-tab="orders">CHỜ KHỚP <span class="cnt" id="cntOrd">0</span></button>
+              <button class="btab btab-arb" data-tab="arb">⚡ FUNDING ARB</button>
+              <button class="btab" data-tab="history">LỊCH SỬ <span class="cnt" id="cntHist">0</span></button>
+              <button class="btab" data-tab="logs">NHẬT KÝ</button>
+            </div>
+            <button class="btn btn-xs btn-danger-outline" id="btnCloseAll">Đóng tất cả</button>
+          </div>
+          <div class="blotter-body">
+            <div class="tab-pane active" id="panePositions">
+              <table class="quant-table">
+                <thead>
+                  <tr>
+                    <th>SÀN / MÃ</th>
+                    <th>HƯỚNG</th>
+                    <th>SIZE</th>
+                    <th>ENTRY</th>
+                    <th>MARK</th>
+                    <th>SL / TP</th>
+                    <th>uPnL (ROE%)</th>
+                    <th>THAO TÁC</th>
+                  </tr>
+                </thead>
+                <tbody id="tblPositions"></tbody>
+              </table>
+            </div>
+            <div class="tab-pane" id="paneOrders">
+              <table class="quant-table">
+                <thead>
+                  <tr>
+                    <th>SÀN / MÃ</th>
+                    <th>HƯỚNG</th>
+                    <th>SIZE</th>
+                    <th>LIMIT ENTRY</th>
+                    <th>SL / TP</th>
+                    <th>NGUỒN</th>
+                    <th>THAO TÁC</th>
+                  </tr>
+                </thead>
+                <tbody id="tblOrders"></tbody>
+              </table>
+            </div>
+            <div class="tab-pane" id="paneArb">
+              <table class="quant-table">
+                <thead>
+                  <tr>
+                    <th>MÃ</th>
+                    <th>LONG SÀN (RẺ)</th>
+                    <th>SHORT SÀN (ĐẮT)</th>
+                    <th>BASIS</th>
+                    <th>NET APR/NĂM</th>
+                    <th>TRẠNG THÁI</th>
+                    <th>HÀNH ĐỘNG</th>
+                  </tr>
+                </thead>
+                <tbody id="tblArb"></tbody>
+              </table>
+            </div>
+            <div class="tab-pane" id="paneHistory">
+              <table class="quant-table">
+                <thead>
+                  <tr>
+                    <th>THỜI GIAN</th>
+                    <th>MÃ / HƯỚNG</th>
+                    <th>ENTRY → EXIT</th>
+                    <th>LÝ DO</th>
+                    <th>PHÍ SÀN</th>
+                    <th>PnL THỰC</th>
+                  </tr>
+                </thead>
+                <tbody id="tblHistory"></tbody>
+              </table>
+            </div>
+            <div class="tab-pane" id="paneLogs">
+              <div class="log-feed" id="systemLogFeed"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel flow-chart-panel">
+          <div class="panel-hdr">
+            <span class="panel-title">CUMULATIVE VOLUME DELTA (CVD) &amp; DEPTH FLOW</span>
+            <span class="panel-tag gold" id="cvdReadout">CVD: +$0.0M</span>
+          </div>
+          <div class="flow-canvas-wrap">
+            <canvas id="cvdCanvas"></canvas>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ==================== RIGHT COLUMN ==================== -->
+    <aside class="col-right">
+      <section class="panel orderbook-panel">
+        <div class="panel-hdr">
+          <span class="panel-title">ORDERBOOK L2 THỜI GIAN THỰC</span>
+          <span class="panel-tag" id="obVenueTag">AGGREGATED</span>
+        </div>
+        <div class="ob-imbalance-bar">
+          <div class="ob-imb-bid" id="obImbBid" style="width:54%"></div>
+          <div class="ob-imb-ask" id="obImbAsk" style="width:46%"></div>
+        </div>
+        <div class="ob-imb-labels">
+          <span class="pos" id="obBidPct">BID 54%</span>
+          <span class="neg" id="obAskPct">46% ASK</span>
+        </div>
+        <div class="ob-cols-hdr">
+          <span>GIÁ (USDC)</span>
+          <span>KHỐI LƯỢNG</span>
+          <span>TỔNG ($)</span>
+        </div>
+        <div class="ob-asks" id="obAsks"></div>
+        <div class="ob-spread-row">
+          <span class="ob-mid-price" id="obMidPrice">94,280.5</span>
+          <span class="ob-spread-val" id="obSpreadVal">Spread: $1.20 (0.001%)</span>
+        </div>
+        <div class="ob-bids" id="obBids"></div>
+      </section>
+
+      <section class="panel tape-panel">
+        <div class="panel-hdr">
+          <span class="panel-title">LIVE TAPE &amp; WHALE PRINTS</span>
+          <span class="panel-tag cyan" id="tapeRate">18 tx/s</span>
+        </div>
+        <div class="tape-cols-hdr">
+          <span>SÀN</span>
+          <span>GIÁ</span>
+          <span>SIZE ($)</span>
+          <span>GIỜ</span>
+        </div>
+        <div class="tape-list" id="tapeList"></div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- ==================== LIVE API / HYPERLIQUID DEX + ZERO-TRUST 2FA MODAL ==================== -->
+  <div class="modal-backdrop hidden" id="apiModal" role="dialog" aria-modal="true" aria-labelledby="apiModalTitle">
+    <div class="modal-card">
+      <div class="modal-hdr">
+        <div>
+          <h2 id="apiModalTitle">ZERO-TRUST LIVE API CEX &amp; VÍ HYPERLIQUID DEX</h2>
+          <p class="modal-sub">Bắt buộc xác thực 2FA HMAC-SHA256 OTP &amp; ràng buộc IP trước khi kích hoạt Live Bridge</p>
+        </div>
+        <button class="modal-close" id="btnCloseApiModal" aria-label="Đóng">✕</button>
+      </div>
+
+      <div class="modal-scroll-area">
+        <div class="security-alert">
+          <div class="sec-title">⚠ CẢNH BÁO BẢO MẬT QUAN TRỌNG (ZERO-TRUST READ BEFORE CONNECTING)</div>
+          <ul>
+            <li><strong>Tuyệt đối KHÔNG cấp quyền Rút tiền (Withdraw)</strong> cho bất kỳ API Key CEX nào. Luôn bật <strong>IP Whitelist</strong>.</li>
+            <li>Với <strong>Hyperliquid DEX</strong>, chỉ nhập <strong>API Agent Wallet Key</strong> (không có quyền rút USDC khỏi ví chính) và test <strong>Testnet</strong> trước.</li>
+            <li>Khóa chỉ lưu trong <strong>RAM phiên</strong>; hệ thống áp dụng <strong>2FA OTP (HMAC-SHA256, 10 phút, tối đa 5 lần sai, 60s cooldown)</strong> &amp; thu hồi phiên trên mọi thiết bị.</li>
+          </ul>
+        </div>
+
+        <!-- Zero-Trust 2FA HMAC OTP Verification Gate -->
+        <div class="otp-gate-box" id="otpGateBox">
+          <div class="otp-gate-hdr">
+            <span>🛡 BƯỚC 1: XÁC THỰC 2FA (HMAC-SHA256 OTP + IP BINDING)</span>
+            <button type="button" class="btn btn-xs btn-danger-outline" id="btnRevokeSessions">Thu Hồi Mọi Phiên</button>
+          </div>
+          <div class="otp-row">
+            <input type="email" id="otpEmail" value="trader@quantum.io" placeholder="Gmail nhận OTP 6 số..." />
+            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnSendOtp">Gửi OTP</button>
+            <input type="text" id="inpOtpCode" maxlength="6" placeholder="Mã OTP 6 số" autocomplete="one-time-code" />
+            <button type="button" class="btn btn-xs btn-cyan" id="btnVerifyOtp">Xác Minh 2FA</button>
+          </div>
+          <div class="otp-status-line" id="otpStatusText">
+            <span>Trạng thái 2FA: <strong class="gold">Chưa xác minh</strong> (Nút Kích hoạt Live Bridge bị khóa cho tới khi xác thực OTP)</span>
+          </div>
+        </div>
+
+        <div class="modal-tabs" id="apiModalTabs">
+          <button class="mtab active" data-mtab="hyperliquid">Hyperliquid DEX</button>
+          <button class="mtab" data-mtab="cex">CEX API (Binance / Bybit / OKX / Deribit)</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="mtab-pane active" id="mtabHyperliquid">
+            <div class="form-row-2">
+              <div class="field">
+                <label>MẠNG HYPERLIQUID</label>
+                <select id="hlNetwork">
+                  <option value="TESTNET" selected>Arbitrum / Hyperliquid Testnet (Khuyên dùng)</option>
+                  <option value="MAINNET">Hyperliquid Mainnet (Tiền thật)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>VAULT / SUBACCOUNT (TÙY CHỌN)</label>
+                <input type="text" id="hlVault" placeholder="0x... (bỏ trống nếu dùng ví chính)" />
+              </div>
+            </div>
+            <div class="field">
+              <label>ĐỊA CHỈ VÍ CHÍNH (MAIN WALLET ADDRESS)</label>
+              <input type="text" id="hlAddress" placeholder="0x71C... (chỉ đọc số dư &amp; vị thế)" />
+            </div>
+            <div class="field">
+              <label>API AGENT PRIVATE KEY (CHỈ QUYỀN ĐẶT LỆNH, KHÔNG RÚT TIỀN)</label>
+              <input type="password" id="hlAgentKey" placeholder="0x... (lưu tạm trong RAM phiên làm việc)" autocomplete="off" />
+            </div>
+            <div class="modal-status-box" id="hlConnStatus">
+              Trạng thái: <span class="muted">Chưa kết nối — Đang chạy chế độ Demo $100,000 USDC</span>
+            </div>
+          </div>
+
+          <div class="mtab-pane" id="mtabCex">
+            <div class="form-row-3">
+              <div class="field">
+                <label>CHỌN SÀN CEX</label>
+                <select id="cexExchange">
+                  <option value="BINANCE">Binance Futures</option>
+                  <option value="BYBIT">Bybit V5 Linear</option>
+                  <option value="OKX">OKX Perpetual Swap</option>
+                  <option value="DERIBIT">Deribit Perpetual &amp; Options</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>MẠNG CEX</label>
+                <select id="cexNetwork">
+                  <option value="TESTNET" selected>Testnet (An toàn - Khuyên dùng)</option>
+                  <option value="MAINNET">Mainnet (Tiền thật)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>QUYỀN TRUY CẬP</label>
+                <select id="cexPerm">
+                  <option value="READ_ONLY">Read-Only (Xem số dư &amp; vị thế)</option>
+                  <option value="TRADE_NO_WITHDRAW">Trade Only (Cấm rút tiền)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row-2">
+              <div class="field">
+                <label>API KEY</label>
+                <input type="text" id="cexApiKey" placeholder="Nhập API Key..." autocomplete="off" />
+              </div>
+              <div class="field">
+                <label>API SECRET</label>
+                <input type="password" id="cexApiSecret" placeholder="Nhập API Secret..." autocomplete="off" />
+              </div>
+            </div>
+            <div class="form-row-2">
+              <div class="field">
+                <label>PASSPHRASE (BẮT BUỘC VỚI OKX)</label>
+                <input type="password" id="cexPassphrase" placeholder="Nhập Passphrase OKX..." autocomplete="off" />
+              </div>
+              <div class="field">
+                <label>LOCAL SIGNER SERVER</label>
+                <input type="text" id="cexProxy" value="http://127.0.0.1:8787" placeholder="http://127.0.0.1:8787" />
+              </div>
+            </div>
+            <div class="modal-status-box" id="cexConnStatus">
+              Trạng thái: <span class="muted">Chưa cấu hình API Key</span>
+            </div>
+          </div>
+
+          <div class="live-exec-box" id="liveExecConfigBox">
+            <div class="form-row-2">
+              <div class="field">
+                <label>CHẾ ĐỘ THỰC THI KHI LIÊN KẾT</label>
+                <select id="selLiveExecMode">
+                  <option value="SHADOW" selected>🛡 Chạy Bóng (Đọc số dư &amp; giá thật, chưa đẩy lệnh)</option>
+                  <option value="LIVE_EXEC">⚡ Đẩy Lệnh Thật Lên Sàn (Bot &amp; Tay)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>TRẦN SIZE TỐI ĐA MỖI LỆNH THẬT (USDC)</label>
+                <input type="number" id="inpMaxLiveNotional" value="500" min="5" max="500000" step="10" />
+              </div>
+            </div>
+            <div class="live-exec-warn" id="liveExecWarnText">
+              🛡 Đang chọn chế độ Chạy Bóng an toàn: Thuật toán chạy theo vốn thật nhưng chưa gửi lệnh thật lên sàn.
+            </div>
+          </div>
+
+          <div class="modal-status-box live-bal-box" id="liveFetchedBalanceBox">
+            <div class="lbb-left">
+              <span class="muted">SỐ DƯ THỰC TỪ SÀN:</span>
+              <strong class="cyan" id="liveFetchedBalanceVal">Chưa truy vấn — bấm &quot;Kiểm Tra &amp; Lấy Số Dư&quot;</strong>
+            </div>
+            <button type="button" class="btn btn-xs btn-cyan-outline" id="btnFetchBalanceNow">🔄 Lấy Số Dư Thực</button>
+          </div>
+
+          <label class="sec-confirm-check">
+            <input type="checkbox" id="chkSecurityAck" />
+            <span>Tôi xác nhận API Key / Agent Wallet không có quyền rút tiền và hiểu rõ rủi ro giao dịch đòn bẩy.</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="modal-ftr">
+        <button class="btn btn-ghost" id="btnSwitchBackDemo">Dùng Ví Demo</button>
+        <div class="modal-ftr-right">
+          <button class="btn btn-cyan-outline" id="btnTestConn">Kiểm Tra &amp; Lấy Số Dư Thực</button>
+          <button class="btn btn-cyan" id="btnSaveLiveConn" disabled>Lưu &amp; Kích Hoạt Live Bridge</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== CHART CLICK ORDER CONFIRMATION MODAL ==================== -->
+  <div class="modal-backdrop hidden" id="chartOrderConfirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmOrderTitle">
+    <div class="modal-card confirm-order-modal">
+      <div class="modal-hdr">
+        <div>
+          <h2 id="confirmOrderTitle">XÁC NHẬN ĐẶT LỆNH TỪ BIỂU ĐỒ ?</h2>
+          <p class="modal-sub">Kiểm tra lại hướng lệnh, giá Entry và SL/TP trước khi đẩy lệnh Limit</p>
+        </div>
+        <button type="button" class="modal-close" id="btnCloseConfirmModal" aria-label="Đóng">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="side-toggle cfm-side-toggle">
+          <button type="button" class="side-btn long active" id="cfmSideLong">LONG / MUA</button>
+          <button type="button" class="side-btn short" id="cfmSideShort">SHORT / BÁN</button>
+        </div>
+
+        <div class="field">
+          <label for="cfmInpEntry">GIÁ ENTRY LIMIT (CÓ THỂ SỬA NHANH)</label>
+          <input type="number" id="cfmInpEntry" step="0.01" />
+        </div>
+
+        <div class="cfm-summary-list">
+          <div class="cfm-row">
+            <span class="muted">Cặp / Sàn</span>
+            <strong id="cfmSymVenue">BTC-PERP • HYPERLIQUID</strong>
+          </div>
+          <div class="cfm-row">
+            <span class="muted">Kích thước / Đòn bẩy</span>
+            <strong id="cfmSizeLev">$5,000 USDC • 5x</strong>
+          </div>
+          <div class="cfm-row">
+            <span class="muted">Stop Loss (SL)</span>
+            <strong class="neg" id="cfmSlVal">--</strong>
+          </div>
+          <div class="cfm-row">
+            <span class="muted">Take Profit (TP)</span>
+            <strong class="pos" id="cfmTpVal">--</strong>
+          </div>
+          <div class="cfm-row">
+            <span class="muted">Rủi ro / Net R:R</span>
+            <strong class="gold" id="cfmRiskRR">Risk tối đa: -$500 • Net R:R 1 : 2.0</strong>
+          </div>
+        </div>
+
+        <label class="toggle-inline">
+          <input type="checkbox" id="chkModalSkipConfirm" />
+          <span>Bỏ qua hỏi xác nhận cho các lần click tiếp theo</span>
+        </label>
+      </div>
+
+      <div class="modal-ftr cfm-actions">
+        <button type="button" class="btn btn-ghost" id="btnCancelChartOrder">KHÔNG — HỦY BỎ (ESC)</button>
+        <button type="button" class="btn btn-long" id="btnConfirmChartOrder">CÓ — ĐẶT LỆNH LIMIT (ENTER)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== FULL EXCHANGE COIN PICKER MODAL ==================== -->
+  <div class="modal-backdrop hidden" id="coinPickerModal" role="dialog" aria-modal="true" aria-labelledby="coinPickerTitle">
+    <div class="modal-card coin-picker-modal">
+      <div class="modal-hdr">
+        <div>
+          <h2 id="coinPickerTitle">DANH SÁCH COIN TRỰC TIẾP — ALL</h2>
+          <p class="modal-sub" id="coinPickerSub">Tải toàn bộ hợp đồng Vĩnh cửu (Perp) &amp; giá thời gian thực theo từng sàn</p>
+        </div>
+        <div class="modal-ftr-right">
+          <button type="button" class="btn btn-xs btn-cyan-outline" id="btnRefreshCatalog">🔄 Tải lại sàn</button>
+          <button type="button" class="modal-close" id="btnCloseCoinPicker" aria-label="Đóng">✕</button>
+        </div>
+      </div>
+
+      <div class="cp-toolbar">
+        <div class="cp-venue-tabs" id="coinPickerVenueTabs" role="group" aria-label="Chọn sàn để xem toàn bộ coin">
+          <button type="button" class="cp-vtab active" data-cvenue="ALL">ALL</button>
+          <button type="button" class="cp-vtab" data-cvenue="HYPERLIQUID">HYPERLIQUID</button>
+          <button type="button" class="cp-vtab" data-cvenue="BINANCE">BINANCE</button>
+          <button type="button" class="cp-vtab" data-cvenue="BYBIT">BYBIT</button>
+          <button type="button" class="cp-vtab" data-cvenue="OKX">OKX</button>
+          <button type="button" class="cp-vtab" data-cvenue="DERIBIT">DERIBIT</button>
+        </div>
+        <div class="cp-search-row">
+          <input type="text" id="inpCoinSearch" class="cp-search-inp" placeholder="Tìm coin (VD: SUI, PEPE, AVAX, LINK, TON, WIF, GOLD...)" autocomplete="off" />
+          <div class="cp-sort-btns" id="coinPickerSortGroup">
+            <button type="button" class="cp-sort-btn active" data-sort="volume">Vol ↓</button>
+            <button type="button" class="cp-sort-btn" data-sort="gainers">Tăng ↑</button>
+            <button type="button" class="cp-sort-btn" data-sort="losers">Giảm ↓</button>
+            <button type="button" class="cp-sort-btn" data-sort="name">A–Z</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-scroll-area cp-list-wrap">
+        <table class="quant-table cp-table">
+          <thead>
+            <tr>
+              <th>COIN / MÃ SÀN</th>
+              <th>GIÁ LIVE</th>
+              <th>24H %</th>
+              <th>FUND 8H</th>
+              <th>VOL 24H</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="coinPickerList"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== COMMAND PALETTE (CTRL+K / CMD+K) ==================== -->
+  <div class="cmd-backdrop hidden" id="cmdPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Quantum Core Command Palette">
+    <div class="cmd-modal">
+      <div class="cmd-input-wrap">
+        <span class="cmd-kbd">⌘K</span>
+        <input type="text" class="cmd-input" id="cmdPaletteInput" placeholder="Gõ lệnh nhanh: BTC, Hyperliquid, Arbitrage, Bot, Shock, 2FA..." />
+        <span class="cmd-kbd">ESC</span>
+      </div>
+      <div class="cmd-list" id="cmdPaletteList" role="listbox"></div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toastStack"></div>
+
+  <!-- GSAP 3.15 CDN (graceful offline fallback in motionController.js) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.15/dist/gsap.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.15/dist/CustomEase.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.15/dist/Flip.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.15/dist/ScrollTrigger.min.js"></script>
+
+  <!-- Core Data & Security Modules (UMD) -->
+  <script defer src="src/core/uuid.js"></script>
+  <script defer src="src/core/schemas.js"></script>
+  <script defer src="src/core/securityGate.js"></script>
+
+  <!-- Domain Engines (UMD) -->
+  <script defer src="src/engines/marketEngine.js"></script>
+  <script defer src="src/engines/tradingEngine.js"></script>
+
+  <!-- UI Controllers & 60FPS Renderers -->
+  <script defer src="src/ui/visualizers.js"></script>
+  <script defer src="src/ui/motionController.js"></script>
+  <script defer src="src/ui/commandPalette.js"></script>
+  <script defer src="src/ui/app.js"></script>
+</body>
+</html>

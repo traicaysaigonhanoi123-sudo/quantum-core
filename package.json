@@ -1,0 +1,14 @@
+{
+  "name": "quantum-core-terminal",
+  "version": "2.0.0",
+  "description": "QUANTUM CORE // Multi-Exchange Quant & Orderflow Terminal (Zero-Trust Architecture)",
+  "private": true,
+  "scripts": {
+    "start": "node server/server.mjs",
+    "dev": "node server/server.mjs",
+    "test": "node --test tests/core.test.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

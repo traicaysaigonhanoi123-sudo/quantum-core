@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QUANTUM CORE // System Architecture &amp; Zero-Trust Orderflow Diagram</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --canvas: #F7F8FA;
+      --surface: #FFFFFF;
+      --border: #E2E8F0;
+      --divider: #F1F5F9;
+      --ink-strong: #0F172A;
+      --ink-body: #334155;
+      --ink-muted: #64748B;
+      --accent: #2563EB;
+      --accent-dark: #1D4ED8;
+      --emerald: #059669;
+      --amber: #D97706;
+      --radius: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--canvas);
+      color: var(--ink-body);
+      font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+      padding: 32px;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+    .hdr {
+      display: flex; justify-content: space-between; align-items: flex-end;
+      padding-bottom: 16px; border-bottom: 1px solid var(--border);
+    }
+    .kicker {
+      font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700;
+      color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase;
+    }
+    h1 {
+      font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: var(--ink-strong);
+      margin-top: 4px;
+    }
+    .badge {
+      font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+      padding: 4px 10px; border-radius: var(--radius);
+      background: var(--surface); border: 1px solid var(--border); color: var(--ink-strong);
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 4px 20px -2px rgba(15,23,42,0.05), 0 1px 2px 0 rgba(15,23,42,0.04), inset 0 1px 0 0 #FFFFFF;
+      padding: 24px;
+    }
+    .legend-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+    }
+    .leg-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
+    }
+    .leg-title { font-weight: 700; font-size: 13px; color: var(--ink-strong); letter-spacing: -0.02em; }
+    .leg-desc { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+    svg { width: 100%; height: auto; display: block; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hdr">
+      <div>
+        <div class="kicker">EDITORIAL ARCHITECTURE SPECIFICATION // DIAGRAM-DESIGN</div>
+        <h1>QUANTUM CORE — Zero-Trust Orderflow &amp; Multi-Exchange Pipeline</h1>
+      </div>
+      <div class="badge">ALABASTER PORCELAIN SPEC • UUID v4 • HMAC-SHA256</div>
+    </header>
+
+    <section class="card">
+      <svg viewBox="0 0 1040 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Quantum Core Zero-Trust Architecture">
+        <defs>
+          <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,1 L7,4 L0,7 Z" fill="#2563EB" />
+          </marker>
+          <marker id="arrowInk" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,1 L7,4 L0,7 Z" fill="#334155" />
+          </marker>
+          <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,1 L7,4 L0,7 Z" fill="#059669" />
+          </marker>
+        </defs>
+
+        <!-- Layer Backgrounds -->
+        <rect x="12" y="16" width="230" height="444" rx="6" fill="#F7F8FA" stroke="#E2E8F0" />
+        <text x="28" y="40" font-size="11" font-weight="700" fill="#64748B" class="mono">01 / CLIENT TERMINAL</text>
+
+        <rect x="272" y="16" width="248" height="444" rx="6" fill="#F7F8FA" stroke="#E2E8F0" />
+        <text x="288" y="40" font-size="11" font-weight="700" fill="#2563EB" class="mono">02 / CORE DATA &amp; RISK</text>
+
+        <rect x="550" y="16" width="230" height="444" rx="6" fill="#F7F8FA" stroke="#E2E8F0" />
+        <text x="566" y="40" font-size="11" font-weight="700" fill="#059669" class="mono">03 / ZERO-TRUST GATE</text>
+
+        <rect x="810" y="16" width="218" height="444" rx="6" fill="#F7F8FA" stroke="#E2E8F0" />
+        <text x="826" y="40" font-size="11" font-weight="700" fill="#0F172A" class="mono">04 / MULTI-EXCHANGE</text>
+
+        <!-- Col 1 Nodes -->
+        <rect x="28" y="64" width="198" height="76" rx="6" fill="#FFFFFF" stroke="#E2E8F0" />
+        <text x="42" y="88" font-size="12" font-weight="700" fill="#0F172A">Cyber-Quant UI</text>
+        <text x="42" y="106" font-size="10.5" fill="#64748B" class="mono">60FPS Canvas + 3D Sphere</text>
+        <text x="42" y="122" font-size="10.5" fill="#64748B" class="mono">Click-Chart SL/TP + Cmd+K</text>
+
+        <rect x="28" y="164" width="198" height="76" rx="6" fill="#FFFFFF" stroke="#E2E8F0" />
+        <text x="42" y="188" font-size="12" font-weight="700" fill="#0F172A">GSAP Motion + A11y</text>
+        <text x="42" y="206" font-size="10.5" fill="#64748B" class="mono">motionController.js</text>
+        <text x="42" y="222" font-size="10.5" fill="#64748B" class="mono">prefers-reduced-motion</text>
+
+        <rect x="28" y="264" width="198" height="76" rx="6" fill="#FFFFFF" stroke="#2563EB" />
+        <text x="42" y="288" font-size="12" font-weight="700" fill="#2563EB">Command Palette (⌘K)</text>
+        <text x="42" y="306" font-size="10.5" fill="#334155" class="mono">WAI-ARIA Dialog + Trap</text>
+        <text x="42" y="322" font-size="10.5" fill="#64748B" class="mono">Keyboard Instrument Jump</text>
+
+        <!-- Col 2 Nodes -->
+        <rect x="288" y="64" width="216" height="84" rx="6" fill="#FFFFFF" stroke="#2563EB" />
+        <text x="302" y="88" font-size="12" font-weight="700" fill="#0F172A">UUID v4 &amp; DTO Schemas</text>
+        <text x="302" y="106" font-size="10.5" fill="#2563EB" class="mono">uuid.js + schemas.js</text>
+        <text x="302" y="124" font-size="10.5" fill="#64748B" class="mono">Zero Sequential IDs</text>
+        <text x="302" y="138" font-size="10.5" fill="#64748B" class="mono">scrubSensitive() Whitelist</text>
+
+        <rect x="288" y="172" width="216" height="92" rx="6" fill="#FFFFFF" stroke="#059669" />
+        <text x="302" y="196" font-size="12" font-weight="700" fill="#0F172A">Institutional Risk Shield</text>
+        <text x="302" y="214" font-size="10.5" fill="#059669" class="mono">0.5% Equity Risk Sizing</text>
+        <text x="302" y="230" font-size="10.5" fill="#64748B" class="mono">Post-Only Maker + Net R:R≥1.5</text>
+        <text x="302" y="246" font-size="10.5" fill="#64748B" class="mono">Auto-BE (+0.8R) &amp; Circuit 2%</text>
+
+        <rect x="288" y="288" width="216" height="92" rx="6" fill="#FFFFFF" stroke="#E2E8F0" />
+        <text x="302" y="312" font-size="12" font-weight="700" fill="#0F172A">Market &amp; Delta-Arb Engine</text>
+        <text x="302" y="330" font-size="10.5" fill="#334155" class="mono">marketEngine.js</text>
+        <text x="302" y="346" font-size="10.5" fill="#64748B" class="mono">5-Venue Funding Scanner</text>
+        <text x="302" y="362" font-size="10.5" fill="#64748B" class="mono">Shock &amp; L2 Orderbook Sim</text>
+
+        <!-- Col 3 Nodes -->
+        <rect x="566" y="64" width="198" height="106" rx="6" fill="#FFFFFF" stroke="#059669" />
+        <text x="580" y="88" font-size="12" font-weight="700" fill="#0F172A">MFA 2FA SecurityGate</text>
+        <text x="580" y="106" font-size="10.5" fill="#059669" class="mono">HMAC-SHA256 OTP Digest</text>
+        <text x="580" y="122" font-size="10.5" fill="#64748B" class="mono">10m TTL • Max 5 Attempts</text>
+        <text x="580" y="138" font-size="10.5" fill="#64748B" class="mono">60s Cooldown • IP Bound</text>
+        <text x="580" y="154" font-size="10.5" fill="#64748B" class="mono">revokeAllSessions()</text>
+
+        <rect x="566" y="196" width="198" height="92" rx="6" fill="#FFFFFF" stroke="#E2E8F0" />
+        <text x="580" y="220" font-size="12" font-weight="700" fill="#0F172A">Node HTTP Zero-Trust</text>
+        <text x="580" y="238" font-size="10.5" fill="#334155" class="mono">server/server.mjs</text>
+        <text x="580" y="254" font-size="10.5" fill="#64748B" class="mono">HttpOnly SameSite=Strict</text>
+        <text x="580" y="270" font-size="10.5" fill="#64748B" class="mono">Rate Limit + Path Guard</text>
+
+        <rect x="566" y="312" width="198" height="84" rx="6" fill="#FFFFFF" stroke="#D97706" />
+        <text x="580" y="336" font-size="12" font-weight="700" fill="#0F172A">Cloudflare Free WAF</text>
+        <text x="580" y="354" font-size="10.5" fill="#D97706" class="mono">SSL Full (Strict)</text>
+        <text x="580" y="370" font-size="10.5" fill="#64748B" class="mono">Bot Fight + 3 WAF Rules</text>
+
+        <!-- Col 4 Nodes -->
+        <rect x="826" y="64" width="186" height="68" rx="6" fill="#FFFFFF" stroke="#059669" />
+        <text x="840" y="88" font-size="12" font-weight="700" fill="#0F172A">Hyperliquid DEX L1</text>
+        <text x="840" y="106" font-size="10.5" fill="#059669" class="mono">metaAndAssetCtxs + Agent</text>
+
+        <rect x="826" y="148" width="186" height="68" rx="6" fill="#FFFFFF" stroke="#D97706" />
+        <text x="840" y="172" font-size="12" font-weight="700" fill="#0F172A">Binance Futures WS</text>
+        <text x="840" y="190" font-size="10.5" fill="#D97706" class="mono">@markPrice@1s Stream</text>
+
+        <rect x="826" y="232" width="186" height="68" rx="6" fill="#FFFFFF" stroke="#E2E8F0" />
+        <text x="840" y="256" font-size="12" font-weight="700" fill="#0F172A">Bybit / OKX / Deribit</text>
+        <text x="840" y="274" font-size="10.5" fill="#64748B" class="mono">Venue Spreads &amp; Funding</text>
+
+        <rect x="826" y="316" width="186" height="80" rx="6" fill="#FFFFFF" stroke="#2563EB" />
+        <text x="840" y="340" font-size="12" font-weight="700" fill="#0F172A">Demo $100K Engine</text>
+        <text x="840" y="358" font-size="10.5" fill="#2563EB" class="mono">Live Limit Match + SL/TP</text>
+        <text x="840" y="374" font-size="10.5" fill="#64748B" class="mono">2x Delta-Neutral Pairs</text>
+
+        <!-- Connectors -->
+        <path d="M226,102 L284,102" stroke="#2563EB" stroke-width="1.6" fill="none" marker-end="url(#arrowBlue)" />
+        <path d="M226,202 L284,218" stroke="#334155" stroke-width="1.4" fill="none" marker-end="url(#arrowInk)" />
+        <path d="M504,106 L562,106" stroke="#059669" stroke-width="1.6" fill="none" marker-end="url(#arrowGreen)" />
+        <path d="M504,218 L562,238" stroke="#334155" stroke-width="1.4" fill="none" marker-end="url(#arrowInk)" />
+        <path d="M764,116 L822,98" stroke="#059669" stroke-width="1.6" fill="none" marker-end="url(#arrowGreen)" />
+        <path d="M764,242 L822,182" stroke="#334155" stroke-width="1.4" fill="none" marker-end="url(#arrowInk)" />
+        <path d="M504,334 L822,354" stroke="#2563EB" stroke-width="1.6" fill="none" marker-end="url(#arrowBlue)" />
+      </svg>
+    </section>
+
+    <section class="legend-grid">
+      <div class="leg-box">
+        <div class="leg-title">1. Zero Sequential IDs</div>
+        <div class="leg-desc">100% Orders, Positions, Logs, Hedge Groups &amp; Auth Sessions use RFC 4122 UUID v4.</div>
+      </div>
+      <div class="leg-box">
+        <div class="leg-title">2. HMAC-SHA256 2FA Gate</div>
+        <div class="leg-desc">Plaintext OTP is never stored; challenges lock after 5 bad guesses and bind to client IP.</div>
+      </div>
+      <div class="leg-box">
+        <div class="leg-title">3. Risk Shield (+EV)</div>
+        <div class="leg-desc">0.5% equity sizing, Post-Only Maker guard, Net R:R &ge; 1.5, Auto-BE (+0.8R) &amp; 2% DD Breaker.</div>
+      </div>
+      <div class="leg-box">
+        <div class="leg-title">4. Anti-Bloat UMD Core</div>
+        <div class="leg-desc">Zero npm runtime dependencies; same core modules run in Node tests, HTTP server &amp; browser.</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.ai-memory/
+.mcp.json
+.env
+.env.*
+node_modules/
+.vercel/
+*.log
+.DS_Store
+Thumbs.db
