@@ -135,28 +135,47 @@
       return `${y}-${m}-${day}`;
     }
 
-    _recordPnlLedgerEntry(dateKey, { netPnl, grossPnl, feeUsd }) {
+    _recordPnlLedgerEntry(dateKey, { netPnl, grossPnl, feeUsd, symbol }) {
       const key = (typeof dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey))
         ? dateKey
         : this._toLocalDateKey(this._now());
       const cur = this.pnlLedger[key] || {
         date: key,
         realizedPnl: 0,
+        profitUsd: 0,
+        lossUsd: 0,
         grossPnl: 0,
         feeUsd: 0,
         trades: 0,
         wins: 0,
-        losses: 0
+        losses: 0,
+        bySymbol: {}
       };
       const net = Number(netPnl) || 0;
       const gross = Number.isFinite(Number(grossPnl)) ? Number(grossPnl) : net;
       const fee = Number(feeUsd) || 0;
       cur.realizedPnl += net;
+      cur.profitUsd = (Number(cur.profitUsd) || 0) + (net > 0 ? net : 0);
+      cur.lossUsd = (Number(cur.lossUsd) || 0) + (net < 0 ? Math.abs(net) : 0);
       cur.grossPnl += gross;
       cur.feeUsd += fee;
       cur.trades += 1;
       if (net >= 0) cur.wins += 1;
       else cur.losses += 1;
+
+      if (symbol && typeof symbol === 'string') {
+        if (!cur.bySymbol || typeof cur.bySymbol !== 'object') cur.bySymbol = {};
+        const sb = cur.bySymbol[symbol] || { pnl: 0, profitUsd: 0, lossUsd: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0 };
+        sb.pnl += net;
+        sb.profitUsd += (net > 0 ? net : 0);
+        sb.lossUsd += (net < 0 ? Math.abs(net) : 0);
+        sb.feeUsd += fee;
+        sb.trades += 1;
+        if (net >= 0) sb.wins += 1;
+        else sb.losses += 1;
+        cur.bySymbol[symbol] = sb;
+      }
+
       this.pnlLedger[key] = cur;
     }
 
@@ -167,12 +186,34 @@
           if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !v || typeof v !== 'object') continue;
           const realizedPnl = Number(v.realizedPnl);
           if (!Number.isFinite(realizedPnl)) continue;
+          const profitUsd = Number.isFinite(Number(v.profitUsd))
+            ? Math.max(0, Number(v.profitUsd))
+            : (realizedPnl > 0 ? realizedPnl : 0);
+          const lossUsd = Number.isFinite(Number(v.lossUsd))
+            ? Math.max(0, Number(v.lossUsd))
+            : (realizedPnl < 0 ? Math.abs(realizedPnl) : 0);
           const grossPnl = Number.isFinite(Number(v.grossPnl)) ? Number(v.grossPnl) : realizedPnl;
           const feeUsd = Number.isFinite(Number(v.feeUsd)) ? Number(v.feeUsd) : 0;
           const trades = Math.max(0, Math.round(Number(v.trades) || 0));
           const wins = Math.max(0, Math.round(Number(v.wins) || 0));
           const losses = Math.max(0, Math.round(Number(v.losses) || 0));
-          out[k] = { date: k, realizedPnl, grossPnl, feeUsd, trades, wins, losses };
+          const bySymbol = {};
+          if (v.bySymbol && typeof v.bySymbol === 'object') {
+            for (const [sym, sb] of Object.entries(v.bySymbol)) {
+              if (!sb || typeof sb !== 'object' || !Number.isFinite(Number(sb.pnl))) continue;
+              const sPnl = Number(sb.pnl);
+              bySymbol[sym] = {
+                pnl: sPnl,
+                profitUsd: Number.isFinite(Number(sb.profitUsd)) ? Math.max(0, Number(sb.profitUsd)) : (sPnl > 0 ? sPnl : 0),
+                lossUsd: Number.isFinite(Number(sb.lossUsd)) ? Math.max(0, Number(sb.lossUsd)) : (sPnl < 0 ? Math.abs(sPnl) : 0),
+                feeUsd: Number.isFinite(Number(sb.feeUsd)) ? Number(sb.feeUsd) : 0,
+                trades: Math.max(0, Math.round(Number(sb.trades) || 0)),
+                wins: Math.max(0, Math.round(Number(sb.wins) || 0)),
+                losses: Math.max(0, Math.round(Number(sb.losses) || 0))
+              };
+            }
+          }
+          out[k] = { date: k, realizedPnl, profitUsd, lossUsd, grossPnl, feeUsd, trades, wins, losses, bySymbol };
         }
       }
       if (Object.keys(out).length === 0 && Array.isArray(fallbackHistory) && fallbackHistory.length > 0) {
@@ -181,14 +222,28 @@
           const dk = (typeof h.dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h.dateKey))
             ? h.dateKey
             : this._toLocalDateKey(h.closedAt || this._now());
-          const cur = out[dk] || { date: dk, realizedPnl: 0, grossPnl: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0 };
+          const cur = out[dk] || { date: dk, realizedPnl: 0, profitUsd: 0, lossUsd: 0, grossPnl: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0, bySymbol: {} };
           const net = Number(h.pnl) || 0;
+          const fee = Number(h.feeUsd) || 0;
           cur.realizedPnl += net;
+          cur.profitUsd += (net > 0 ? net : 0);
+          cur.lossUsd += (net < 0 ? Math.abs(net) : 0);
           cur.grossPnl += Number.isFinite(Number(h.grossPnl)) ? Number(h.grossPnl) : net;
-          cur.feeUsd += Number(h.feeUsd) || 0;
+          cur.feeUsd += fee;
           cur.trades += 1;
           if (net >= 0) cur.wins += 1;
           else cur.losses += 1;
+          if (h.symbol) {
+            const sb = cur.bySymbol[h.symbol] || { pnl: 0, profitUsd: 0, lossUsd: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0 };
+            sb.pnl += net;
+            sb.profitUsd += (net > 0 ? net : 0);
+            sb.lossUsd += (net < 0 ? Math.abs(net) : 0);
+            sb.feeUsd += fee;
+            sb.trades += 1;
+            if (net >= 0) sb.wins += 1;
+            else sb.losses += 1;
+            cur.bySymbol[h.symbol] = sb;
+          }
           out[dk] = cur;
         }
       }
@@ -1767,7 +1822,8 @@
       this._recordPnlLedgerEntry(dateKey, {
         netPnl,
         grossPnl,
-        feeUsd: totalFeeUsd
+        feeUsd: totalFeeUsd,
+        symbol: pos.symbol
       });
 
       const record = {
@@ -2302,7 +2358,8 @@
 
       const isCurrentMonth = (targetYear === currentYear && targetMonth === currentMonth);
       const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
-      const firstWeekday = (new Date(targetYear, targetMonth - 1, 1).getDay() + 6) % 7;
+      const firstWeekdaySun = new Date(targetYear, targetMonth - 1, 1).getDay();
+      const firstWeekday = (firstWeekdaySun + 6) % 7;
       const monthPrefix = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
 
       const days = [];
@@ -2377,6 +2434,7 @@
         isCurrentMonth,
         daysInMonth,
         firstWeekday,
+        firstWeekdaySun,
         days,
         realizedPnl: mRealized,
         unrealizedPnl: mUnrealized,
@@ -2509,6 +2567,174 @@
         today,
         month: monthSummary,
         year: yearSummary
+      };
+    }
+
+    getPnlAnalytics({ year, month, range = '7d', includeUnrealized = true } = {}) {
+      const calendar = this.getPnlCalendarReport({ year, month, includeUnrealized });
+      const nowMs = this._now();
+      const nowDate = new Date(nowMs);
+      const todayKey = calendar.todayKey;
+      const liveUnrealized = includeUnrealized ? calendar.today.unrealizedPnl : 0;
+      const hasOpenUnrealized = includeUnrealized && this.positions.length > 0;
+      const baseCapital = Math.max(1, this.initialCapital || INITIAL_BALANCE);
+
+      const aggregateLastNDays = (nDays) => {
+        let cutoffKey = null;
+        if (Number.isFinite(nDays) && nDays > 0) {
+          const d = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - (nDays - 1));
+          cutoffKey = this._toLocalDateKey(d.getTime());
+        }
+        let realizedPnl = 0;
+        let profitUsd = 0;
+        let lossUsd = 0;
+        let feeUsd = 0;
+        let trades = 0;
+        let wins = 0;
+        let losses = 0;
+        let profitDays = 0;
+        let lossDays = 0;
+        let activeDays = 0;
+        let todayIncluded = false;
+
+        for (const [k, rec] of Object.entries(this.pnlLedger)) {
+          if (k > todayKey) continue;
+          if (cutoffKey && k < cutoffKey) continue;
+          const rNet = Number(rec.realizedPnl) || 0;
+          const rProf = Number.isFinite(Number(rec.profitUsd)) ? Number(rec.profitUsd) : (rNet > 0 ? rNet : 0);
+          const rLoss = Number.isFinite(Number(rec.lossUsd)) ? Number(rec.lossUsd) : (rNet < 0 ? Math.abs(rNet) : 0);
+          realizedPnl += rNet;
+          profitUsd += rProf;
+          lossUsd += rLoss;
+          feeUsd += Number(rec.feeUsd) || 0;
+          trades += Number(rec.trades) || 0;
+          wins += Number(rec.wins) || 0;
+          losses += Number(rec.losses) || 0;
+
+          const dayTotal = k === todayKey ? (rNet + liveUnrealized) : rNet;
+          if (k === todayKey) todayIncluded = true;
+          if ((rec.trades || 0) > 0 || (k === todayKey && hasOpenUnrealized)) {
+            activeDays++;
+            if (dayTotal > 0.005) profitDays++;
+            else if (dayTotal < -0.005) lossDays++;
+          }
+        }
+
+        if (hasOpenUnrealized && !todayIncluded) {
+          activeDays++;
+          if (liveUnrealized > 0.005) profitDays++;
+          else if (liveUnrealized < -0.005) lossDays++;
+        }
+
+        if (includeUnrealized && Math.abs(liveUnrealized) > 0) {
+          if (liveUnrealized >= 0) profitUsd += liveUnrealized;
+          else lossUsd += Math.abs(liveUnrealized);
+        }
+
+        const totalPnl = realizedPnl + liveUnrealized;
+        const netPnl = profitUsd - lossUsd;
+        const pct = (totalPnl / baseCapital) * 100;
+        const winRate = trades > 0 ? (wins / trades) * 100 : 0;
+        const status = (activeDays === 0 && Math.abs(totalPnl) < 0.005)
+          ? 'NONE'
+          : (totalPnl > 0.005 ? 'PROFIT' : (totalPnl < -0.005 ? 'LOSS' : 'FLAT'));
+
+        return {
+          realizedPnl,
+          unrealizedPnl: liveUnrealized,
+          totalPnl,
+          profitUsd,
+          lossUsd,
+          netPnl,
+          pct,
+          feeUsd,
+          trades,
+          wins,
+          losses,
+          winRate,
+          profitDays,
+          lossDays,
+          activeDays,
+          status
+        };
+      };
+
+      const rolling7d = aggregateLastNDays(7);
+      const rolling30d = aggregateLastNDays(30);
+      const lifetime = aggregateLastNDays(null);
+      const rangeDaysMap = { '7d': 7, '1m': 30, '3m': 90, '1y': 365, 'all': null };
+      const normRange = Object.prototype.hasOwnProperty.call(rangeDaysMap, range) ? range : '7d';
+      const selectedRange = { key: normRange, ...aggregateLastNDays(rangeDaysMap[normRange]) };
+
+      // Per-symbol breakdown across pnlLedger + live open positions
+      const symMap = {};
+      for (const rec of Object.values(this.pnlLedger)) {
+        if (!rec.bySymbol || typeof rec.bySymbol !== 'object') continue;
+        for (const [sym, sb] of Object.entries(rec.bySymbol)) {
+          const cur = symMap[sym] || { symbol: sym, realizedPnl: 0, unrealizedPnl: 0, totalPnl: 0, profitUsd: 0, lossUsd: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0 };
+          cur.realizedPnl += Number(sb.pnl) || 0;
+          cur.profitUsd += Number(sb.profitUsd) || 0;
+          cur.lossUsd += Number(sb.lossUsd) || 0;
+          cur.feeUsd += Number(sb.feeUsd) || 0;
+          cur.trades += Number(sb.trades) || 0;
+          cur.wins += Number(sb.wins) || 0;
+          cur.losses += Number(sb.losses) || 0;
+          symMap[sym] = cur;
+        }
+      }
+      if (includeUnrealized) {
+        for (const pos of this.positions) {
+          const cur = symMap[pos.symbol] || { symbol: pos.symbol, realizedPnl: 0, unrealizedPnl: 0, totalPnl: 0, profitUsd: 0, lossUsd: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0 };
+          cur.unrealizedPnl += Number(pos.unrealizedPnl) || 0;
+          symMap[pos.symbol] = cur;
+        }
+      }
+      const bySymbol = Object.values(symMap)
+        .map((s) => {
+          s.totalPnl = s.realizedPnl + s.unrealizedPnl;
+          s.winRate = s.trades > 0 ? (s.wins / s.trades) * 100 : 0;
+          return s;
+        })
+        .sort((a, b) => Math.abs(b.totalPnl) - Math.abs(a.totalPnl));
+
+      // Active daily rows sorted descending
+      const dailyMap = {};
+      for (const [k, rec] of Object.entries(this.pnlLedger)) {
+        if ((rec.trades || 0) === 0 && Math.abs(rec.realizedPnl || 0) < 0.005) continue;
+        dailyMap[k] = {
+          dateKey: k,
+          realizedPnl: Number(rec.realizedPnl) || 0,
+          unrealizedPnl: k === todayKey ? liveUnrealized : 0,
+          totalPnl: (Number(rec.realizedPnl) || 0) + (k === todayKey ? liveUnrealized : 0),
+          feeUsd: Number(rec.feeUsd) || 0,
+          trades: Number(rec.trades) || 0,
+          wins: Number(rec.wins) || 0,
+          losses: Number(rec.losses) || 0
+        };
+      }
+      if (hasOpenUnrealized && !dailyMap[todayKey]) {
+        dailyMap[todayKey] = {
+          dateKey: todayKey,
+          realizedPnl: 0,
+          unrealizedPnl: liveUnrealized,
+          totalPnl: liveUnrealized,
+          feeUsd: 0,
+          trades: 0,
+          wins: 0,
+          losses: 0
+        };
+      }
+      const dailyEntries = Object.values(dailyMap).sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+
+      return {
+        calendar,
+        today: calendar.today,
+        rolling7d,
+        rolling30d,
+        lifetime,
+        selectedRange,
+        bySymbol,
+        dailyEntries
       };
     }
   }

@@ -1806,6 +1806,20 @@ test('PnL Calendar ledger tracks today, days in month, months in year, live uPnL
   });
   assert.equal(legacyRestored.importState(legacySnap), true);
   assert.ok(Math.abs(legacyRestored.getPnlCalendarReport().today.realizedPnl - pnlNov27Closed) < 1e-6);
+
+  // 6. Binance-style getPnlAnalytics aggregates rolling 7d/30d/lifetime, Profit/Loss/Net, bySymbol & dailyEntries
+  const analytics = trading.getPnlAnalytics({ year: 2026, month: 11, range: '1m' });
+  assert.equal(analytics.calendar.month.firstWeekdaySun, 0); // Nov 1, 2026 is Sunday
+  assert.ok(analytics.selectedRange.profitUsd > 0);
+  assert.ok(analytics.selectedRange.lossUsd > 0);
+  assert.ok(Math.abs((analytics.selectedRange.profitUsd - analytics.selectedRange.lossUsd) - analytics.selectedRange.netPnl) < 1e-6);
+  assert.ok(Number.isFinite(analytics.rolling7d.totalPnl));
+  assert.ok(Number.isFinite(analytics.rolling30d.totalPnl));
+  assert.ok(Number.isFinite(analytics.lifetime.totalPnl));
+  assert.ok(analytics.bySymbol.some((s) => s.symbol === 'SOL-PERP'));
+  assert.ok(analytics.bySymbol.some((s) => s.symbol === 'BTC-PERP'));
+  assert.ok(analytics.dailyEntries.length >= 4);
+  assert.ok(analytics.dailyEntries[0].dateKey >= analytics.dailyEntries[1].dateKey);
 });
 
 test('Timeframes 15m/30m/1h map exchange intervals cleanly and compute UP/DOWN directional forecasts', () => {
