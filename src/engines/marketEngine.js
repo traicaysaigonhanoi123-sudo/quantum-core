@@ -1525,6 +1525,7 @@
       const cvdSlope = cvdArr.length >= 5 ? cvdArr[cvdArr.length - 1] - cvdArr[cvdArr.length - 5] : 0;
 
       let rawScore;
+      let trendScore = 0;
       let suggestedSlPct;
       let suggestedTpPct;
       let htf5m = { bias: 'NEUTRAL', aligned: false, spreadPct: 0, slopePct: 0, atr5mPct: 0.2, barsCount: 0 };
@@ -1577,7 +1578,14 @@
         const maxSafeLongExtPct = Math.max(0.55, normAtr * 3.8);
         const maxSafeShortExtPct = Math.max(0.65, normAtr * 4.4);
 
-        // Overextension / peak-and-bottom chasing cap
+        // Track continuation trend strength before applying the NEW-ENTRY overextension cap
+        trendScore = rawScore;
+        const scaleScores = (f) => {
+          rawScore *= f;
+          trendScore *= f;
+        };
+
+        // Overextension / peak-and-bottom chasing cap (prevents late FOMO entries while letting open winning TPs trail)
         if (rawScore > 0 && ((rsi > 70 && zScore > 1.35) || zScore > 1.85 || extFromEma21Pct > maxSafeLongExtPct)) {
           rawScore = Math.min(rawScore, 22);
           entryWarn = 'Chờ hồi (quá mua)';
@@ -1588,21 +1596,21 @@
 
         // Candle structure & rejection-wick guard (do not enter against an active reversal candle)
         if (rawScore > 0 && (upperWickPct >= 0.58 || (lastBar.c < lastBar.o && lastClose < ema8))) {
-          rawScore *= 0.45;
+          scaleScores(0.45);
           if (!entryWarn) entryWarn = 'Nến bị xả/râu trên';
         } else if (rawScore < 0 && (lowerWickPct >= 0.58 || (lastBar.c > lastBar.o && lastClose > ema8))) {
-          rawScore *= 0.45;
+          scaleScores(0.45);
           if (!entryWarn) entryWarn = 'Nến rút chân dưới';
         }
 
         // Orderflow agreement guard (block entries when live L2 Bid/Ask & CVD contradict the trend)
         if ((rawScore > 0 && bidRatio < 0.47 && cvdSlope < 0) || (rawScore < 0 && bidRatio > 0.53 && cvdSlope > 0)) {
-          rawScore *= 0.55;
+          scaleScores(0.55);
           if (!entryWarn) entryWarn = 'Orderflow ngược chiều';
         }
 
         if ((emaSpread821Pct > 0 && emaSlopePct < 0 && macdAccelPct < 0) || (emaSpread821Pct < 0 && emaSlopePct > 0 && macdAccelPct > 0)) {
-          rawScore *= 0.55;
+          scaleScores(0.55);
         }
 
         // Filter 1: Multi-timeframe 5m & 15m trend confirmation (blocks counter-trend traps)
@@ -1610,10 +1618,10 @@
         htf5m = { ...computed5m, aligned: false };
         if (this.mtfFilterEnabled && computed5m.bias !== 'NEUTRAL') {
           if ((rawScore > 0 && computed5m.bias === 'BEAR') || (rawScore < 0 && computed5m.bias === 'BULL')) {
-            rawScore *= 0.30;
+            scaleScores(0.30);
             htf5m.aligned = false;
           } else if ((rawScore > 0 && computed5m.bias === 'BULL') || (rawScore < 0 && computed5m.bias === 'BEAR')) {
-            rawScore *= 1.12;
+            scaleScores(1.12);
             htf5m.aligned = true;
           }
         }
@@ -1622,14 +1630,16 @@
         htf15m = { ...computed15m, aligned: false };
         if (this.mtfFilterEnabled && computed15m.bias !== 'NEUTRAL') {
           if ((rawScore > 0 && computed15m.bias === 'BEAR') || (rawScore < 0 && computed15m.bias === 'BULL')) {
-            rawScore *= 0.35;
+            scaleScores(0.35);
             htf15m.aligned = false;
             if (!entryWarn) entryWarn = 'Ngược khung 15m';
           } else if ((rawScore > 0 && computed15m.bias === 'BULL') || (rawScore < 0 && computed15m.bias === 'BEAR')) {
-            rawScore *= 1.08;
+            scaleScores(1.08);
             htf15m.aligned = true;
           }
         }
+
+        trendScore = Math.round(Math.max(-100, Math.min(100, trendScore)));
 
         // Filter 2: High-volatility / Flash-news spike detector
         if (this.newsSpikeFilterEnabled) {
@@ -1665,6 +1675,7 @@
         const impulseScore = emaSlopePct * 250 + macdAccelPct * 340 + macdHistPct * 220 + emaSpread821Pct * 115;
 
         rawScore = impulseScore + flowLeadScore;
+        trendScore = rawScore;
 
         // Hard late-wave exhaustion cap: never enter late in an aging rally or selloff
         if (rawScore > 0 && (extFromEma21Pct > maxSafeExtPct || rsi > 64 || zScore > 1.45)) {
@@ -1676,7 +1687,9 @@
         // Late momentum deceleration dampener
         if ((emaSpread821Pct > 0 && emaSlopePct < 0) || (emaSpread821Pct < 0 && emaSlopePct > 0)) {
           rawScore *= 0.4;
+          trendScore *= 0.4;
         }
+        trendScore = Math.round(Math.max(-100, Math.min(100, trendScore)));
 
         suggestedSlPct = Number(Math.max(0.35, Math.min(0.80, Math.max(atrPct * 2.2, cfg.vol * 100 * 5.0))).toFixed(2));
         suggestedTpPct = Number(Math.max(0.85, Math.min(2.15, suggestedSlPct * 2.25)).toFixed(2));
@@ -1703,6 +1716,7 @@
 
       return {
         score,
+        trendScore,
         side,
         confidence,
         reasons,

@@ -1933,7 +1933,7 @@ test('Reload under live WebSocket mode preserves Demo positions across seed-pric
     assert.ok(btcPos && pepePos);
 
     const snap = t1.exportState();
-    assert.equal(snap.version, 2);
+    assert.equal(snap.version, 3);
     assert.equal(snap.strictSlTpOnly, true);
     assert.equal(snap.positions.length, 2);
 
@@ -2081,4 +2081,153 @@ test('Live signal engine rejects choppy sideways ranges, enforces structure-awar
 
   fakeNow += 120_000; // Now past 180s per-symbol cooldown
   assert.ok(fakeNow >= trading.symbolLossCooldownUntil['BTC-PERP']);
+});
+
+test('Dynamic TP extension widens TP (up to 3x) and ratchets SL into guaranteed profit during strong aligned trend', () => {
+  let fakeNow = 1_760_050_000_000;
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas, nowFn: () => fakeNow });
+  trading.setCapital(500);
+  trading.strictSlTpOnly = true;
+  trading.riskShield.autoBreakeven = false;
+  trading.riskShield.autoTrailing = false;
+  trading.setAutoExtendTp(true);
+  market.wsEnabled = true;
+
+  const btcSt = market.getSymbolState('BTC-PERP');
+  const buildUptrend = (endPrice) => {
+    const arr = [];
+    let p = endPrice - 250;
+    for (let i = 55; i > 0; i--) {
+      const o = p;
+      const step = i > 18 ? (i % 3 === 0 ? -24 : 28) : (i % 3 === 0 ? -42 : 46);
+      const c = o + step;
+      arr.push({ t: fakeNow - i * 60000, o, h: Math.max(o, c) + 25, l: Math.min(o, c) - 20, c, v: 1300 + (56 - i) * 10 });
+      p = c;
+    }
+    return { arr, lastPx: p };
+  };
+
+  const applyBullSnapshot = (candles, px) => {
+    btcSt.candles = candles.map((c) => ({ ...c }));
+    btcSt.signalCandles = candles.map((c) => ({ ...c }));
+    btcSt.currentCandle = { ...candles[candles.length - 1] };
+    btcSt.flowImbalance = 0.28;
+    btcSt.cvdHistory = [0.2, 0.5, 0.8, 1.1, 1.5];
+    market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', px, 0.01, 1.5);
+    market._rebuildOrderbook(btcSt);
+  };
+
+  const { arr: baseTrend, lastPx: entryPx } = buildUptrend(90000);
+  applyBullSnapshot(baseTrend, entryPx);
+
+  const openPos = trading.placeMarketOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    sizeUsd: 200,
+    leverage: 5,
+    slPct: 0.8,
+    tpPct: 1.5,
+    source: 'BOT'
+  });
+  assert.ok(openPos);
+  const initialTp = openPos.tpPrice;
+  const initialSl = openPos.slPrice;
+
+  // Push price smoothly via gradual 1m candles (max ~0.2% per bar, no flash spike) across >= 80% of TP 4 times
+  for (let stepIdx = 1; stepIdx <= 4; stepIdx++) {
+    const span = openPos.tpPrice - openPos.entryPrice;
+    const targetPx = openPos.entryPrice + span * 0.84;
+    const startPx = btcSt.candles[btcSt.candles.length - 1].c;
+    const legs = 8;
+    const perLeg = (targetPx - startPx) / legs;
+    for (let k = 1; k <= legs; k++) {
+      const prevBar = btcSt.candles[btcSt.candles.length - 1];
+      const nextClose = k === legs ? targetPx : prevBar.c + perLeg;
+      btcSt.candles.push({
+        t: prevBar.t + 60000,
+        o: prevBar.c,
+        h: Math.max(prevBar.c, nextClose) + 12,
+        l: Math.min(prevBar.c, nextClose) - 10,
+        c: nextClose,
+        v: 1550
+      });
+      btcSt.candles.shift();
+    }
+    applyBullSnapshot(btcSt.candles, targetPx);
+    trading.onMarketTick();
+  }
+
+  assert.equal(openPos.tpExtensions, 3, 'Dynamic TP should cap at 3 extensions');
+  assert.ok(openPos.tpPrice > initialTp * 1.015, 'TP should have widened noticeably across 3 extensions');
+  assert.ok(openPos.slPrice > openPos.entryPrice && openPos.slPrice > initialSl, 'SL must ratchet into guaranteed profit above entry');
+  assert.equal(openPos.beLocked, true);
+  assert.equal(openPos.trailingActive, true);
+  assert.equal(trading.getPublicPositions()[0].tpExtensions, 3);
+  assert.equal(trading.exportState().version, 3);
+
+  // Pullback to ratcheted trailing SL closes in profit with TRAILING PROFIT
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', openPos.slPrice - 5, 0.01, 0.5);
+  trading.onMarketTick();
+  assert.equal(trading.positions.length, 0);
+  assert.equal(trading.history[0].reason, 'TRAILING PROFIT');
+  assert.ok(trading.history[0].pnl > 0, `Expected positive locked profit on pullback, got ${trading.history[0].pnl}`);
+
+  // Guardrail 1: When autoExtendTp is OFF, strong trend at 85% of TP leaves TP unchanged
+  trading.setAutoExtendTp(false);
+  const posOff = trading.placeMarketOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    sizeUsd: 150,
+    leverage: 5,
+    slPct: 0.8,
+    tpPct: 1.5,
+    source: 'BOT'
+  });
+  assert.ok(posOff);
+  const offInitialTp = posOff.tpPrice;
+  const offNearTpPx = posOff.entryPrice + (offInitialTp - posOff.entryPrice) * 0.85;
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', offNearTpPx, 0.01, 1.6);
+  trading.onMarketTick();
+  assert.equal(posOff.tpExtensions, 0);
+  assert.equal(posOff.tpPrice, offInitialTp);
+  trading.closePosition(posOff.id, 'MANUAL EXIT', offNearTpPx);
+
+  // Guardrail 2: Even with autoExtendTp ON, choppy sideways trend (ER < 0.30) must NOT extend TP
+  trading.setAutoExtendTp(true);
+  const chopArr = [];
+  let cpx = 90000;
+  for (let i = 55; i > 0; i--) {
+    const o = cpx;
+    const c = o + (i % 2 === 0 ? 55 : -53);
+    chopArr.push({ t: fakeNow - i * 60000, o, h: Math.max(o, c) + 20, l: Math.min(o, c) - 20, c, v: 900 });
+    cpx = c;
+  }
+  btcSt.candles = chopArr.map((c) => ({ ...c }));
+  btcSt.signalCandles = chopArr.map((c) => ({ ...c }));
+  btcSt.currentCandle = { ...chopArr[chopArr.length - 1] };
+  btcSt.flowImbalance = 0.25;
+  btcSt.cvdHistory = [0.2, 0.5, 0.8, 1.0, 1.2];
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', cpx, 0.01, 1.2);
+  market._rebuildOrderbook(btcSt);
+
+  const posChop = trading.placeMarketOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    sizeUsd: 150,
+    leverage: 5,
+    slPct: 0.8,
+    tpPct: 1.5,
+    source: 'MANUAL'
+  });
+  assert.ok(posChop);
+  const chopInitialTp = posChop.tpPrice;
+  const chopNearTpPx = posChop.entryPrice + (chopInitialTp - posChop.entryPrice) * 0.86;
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', chopNearTpPx, 0.01, 1.2);
+  trading.onMarketTick();
+  assert.equal(posChop.tpExtensions, 0);
+  assert.equal(posChop.tpPrice, chopInitialTp);
 });

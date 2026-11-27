@@ -144,6 +144,7 @@
     }
     const setChk = (id, val) => { const el = $(id); if (el) el.checked = Boolean(val); };
     setChk('chkStrictSlTp', trading.strictSlTpOnly);
+    setChk('chkDynamicTp', trading.riskShield.autoExtendTp);
     setChk('chkDailyProfitLock', trading.dailyProfitLockEnabled);
     setChk('chkMtfFilter', market.mtfFilterEnabled);
     setChk('chkNewsSpikeFilter', market.newsSpikeFilterEnabled);
@@ -464,7 +465,7 @@
     if (activeBlotterTab === 'positions') {
       const posSig = positions.length === 0
         ? 'empty'
-        : `${market.activeSymbol}|${positions.map((p) => `${p.id}:${p.markPrice}:${p.unrealizedPnl.toFixed(2)}:${p.slPrice}:${p.tpPrice}:${p.beLocked ? 1 : 0}:${p.trailingActive ? 1 : 0}`).join(';')}`;
+        : `${market.activeSymbol}|${positions.map((p) => `${p.id}:${p.markPrice}:${p.unrealizedPnl.toFixed(2)}:${p.slPrice}:${p.tpPrice}:${p.beLocked ? 1 : 0}:${p.trailingActive ? 1 : 0}:${p.tpExtensions || 0}`).join(';')}`;
       if (force || posSig !== lastPosSig) {
         lastPosSig = posSig;
         if (positions.length === 0) {
@@ -475,9 +476,10 @@
               const pnlCls = p.unrealizedPnl >= 0 ? 'pos' : 'neg';
               const sign = p.unrealizedPnl >= 0 ? '+' : '';
               const isViewing = p.symbol === market.activeSymbol;
+              const tpExtBadge = p.tpExtensions > 0 ? `<span class="be-tag">TP+${p.tpExtensions} 🚀</span>` : '';
               const shieldBadge = p.trailingActive
-                ? '<span class="be-tag">TRAIL 🔒</span>'
-                : (p.beLocked ? '<span class="be-tag">SL=BE 🔒</span>' : (p.hedgeGroupId ? '<span class="arb-badge">HEDGE</span>' : ''));
+                ? `${tpExtBadge}<span class="be-tag">TRAIL 🔒</span>`
+                : (p.beLocked ? `${tpExtBadge}<span class="be-tag">SL=BE 🔒</span>` : (p.hedgeGroupId ? '<span class="arb-badge">HEDGE</span>' : tpExtBadge));
               const slTpCell = p.hedgeGroupId
                 ? `<span class="cyan">Delta-Neutral</span> <span class="muted">(F: ${fmtSignedUsd(p.accruedFundingUsd || 0, 2)})</span>`
                 : `<span class="neg">${market.formatPrice(p.slPrice, p.symbol)}</span> / <span class="pos">${market.formatPrice(p.tpPrice, p.symbol)}</span>`;
@@ -2996,6 +2998,21 @@
       });
     }
 
+    const chkDynamicTp = $('chkDynamicTp');
+    if (chkDynamicTp) {
+      chkDynamicTp.addEventListener('change', (e) => {
+        trading.setAutoExtendTp(e.target.checked);
+        savePersistedState(true);
+        showToast({
+          type: e.target.checked ? 'pos' : 'gold',
+          title: e.target.checked ? '🚀 DỜI TP THEO XU HƯỚNG' : 'TẮT DỜI TP TỰ ĐỘNG',
+          msg: e.target.checked
+            ? 'Coin lời mạnh gần TP sẽ tự nới TP (tối đa 3x) & kéo SL lên khóa lãi.'
+            : 'Giữ cố định giá TP ban đầu, không tự dời TP.'
+        });
+      });
+    }
+
     const chkDailyProfitLock = $('chkDailyProfitLock');
     if (chkDailyProfitLock) {
       chkDailyProfitLock.addEventListener('change', (e) => {
@@ -3843,14 +3860,21 @@
     trading.autoFlattenOnBreak = false;
     trading.riskShield.autoBreakeven = false;
     trading.riskShield.autoTrailing = false;
-  } else if (!parsedState?.version || parsedState.version < 2) {
-    // One-time v1 -> v2 migration: enforce strict TP/SL hold so Demo orders never auto-close unexpectedly
-    trading.strictSlTpOnly = true;
-    trading.autoFlattenOnBreak = false;
-    trading.riskShield.autoBreakeven = false;
-    trading.riskShield.autoTrailing = false;
-    if (trading.breakerTripped && market.shockIntensity <= 0.15) {
-      trading.resetCircuitBreaker(true);
+    trading.riskShield.autoExtendTp = true;
+  } else {
+    if (!parsedState?.version || parsedState.version < 2) {
+      // One-time v1 -> v2 migration: enforce strict TP/SL hold so Demo orders never auto-close unexpectedly
+      trading.strictSlTpOnly = true;
+      trading.autoFlattenOnBreak = false;
+      trading.riskShield.autoBreakeven = false;
+      trading.riskShield.autoTrailing = false;
+      if (trading.breakerTripped && market.shockIntensity <= 0.15) {
+        trading.resetCircuitBreaker(true);
+      }
+    }
+    if (!parsedState?.version || parsedState.version < 3) {
+      // One-time v2 -> v3 migration: enable dynamic TP extension + trailing SL profit lock by default
+      trading.riskShield.autoExtendTp = true;
     }
   }
   buildVenueCards();

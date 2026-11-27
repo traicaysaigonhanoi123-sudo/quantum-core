@@ -97,6 +97,7 @@
         postOnlyMaker: true,
         autoBreakeven: true,
         autoTrailing: true,
+        autoExtendTp: false,
         minNetRR: 1.5,
         consecutiveLosses: 0,
         cooldownUntil: 0,
@@ -590,6 +591,15 @@
       return this.strictSlTpOnly;
     }
 
+    setAutoExtendTp(enabled) {
+      this.riskShield.autoExtendTp = Boolean(enabled);
+      this._log('SHIELD', this.riskShield.autoExtendTp
+        ? '🚀 Đã BẬT Dời TP theo xu hướng: coin đang lời mạnh gần TP sẽ tự nới TP (tối đa 3 lần) và kéo SL khóa lãi theo.'
+        : 'Đã TẮT Dời TP theo xu hướng: lệnh giữ nguyên TP ban đầu.');
+      this._emit('updated');
+      return this.riskShield.autoExtendTp;
+    }
+
     _isPositionAwaitingLiveQuote(pos) {
       return Boolean(
         pos &&
@@ -656,7 +666,7 @@
     exportState() {
       const cloneObj = (o) => JSON.parse(JSON.stringify(o));
       return {
-        version: 2,
+        version: 3,
         savedAt: this._now(),
         initialCapital: this.initialCapital,
         demoCapitalBackup: this.demoCapitalBackup,
@@ -1771,6 +1781,8 @@
         plannedMaxLossUsd: Number((order.sizeUsd * (((Number(order.slPct) || 0.65) + 0.12) / 100)).toFixed(2)),
         beLocked: false,
         trailingActive: false,
+        tpExtensions: 0,
+        initialTpPrice: order.tpPrice,
         hedgeGroupId: order.hedgeGroupId || null,
         accruedFundingUsd: 0,
         entryFeeUsd,
@@ -2059,46 +2071,81 @@
         const beBuffer = rtFeeFrac + 0.0012;
         const minBeSl = pos.entryPrice * (1 + dir * beBuffer);
 
+        const syncLiveSl = (minIntervalMs = 0, minMoveFrac = 0) => {
+          if (!this.isLiveExecutionActive() || pos._rolledBack || typeof this.liveExecutionAdapter.modifyStopLoss !== 'function') {
+            return;
+          }
+          const prevSynced = pos._lastSyncedSlPx || 0;
+          const slMoveFrac = prevSynced > 0 ? Math.abs(pos.slPrice - prevSynced) / prevSynced : 1;
+          if (slMoveFrac < minMoveFrac || (nowMs - (pos._lastLiveSlSyncAt || 0)) < minIntervalMs) {
+            return;
+          }
+          pos._lastLiveSlSyncAt = nowMs;
+          pos._lastSyncedSlPx = pos.slPrice;
+          Promise.resolve().then(() => this.liveExecutionAdapter.modifyStopLoss({
+            venue: pos.exchange,
+            network: this.liveConfig.network || 'TESTNET',
+            symbol: pos.symbol,
+            side: pos.side,
+            slPrice: pos.slPrice,
+            sizeUsd: pos.sizeUsd,
+            refPrice: px
+          })).catch(() => null);
+        };
+
         if (this.riskShield.autoBreakeven && !pos.beLocked && rMultiple >= 0.55) {
           pos.slPrice = minBeSl;
           pos.beLocked = true;
           this._log('SHIELD', `🔒 AUTO-BREAKEVEN: Dời SL ${pos.symbol} #${this._uuid.shortId(pos.id)} khóa lãi dương + phí @ ${this.market.formatPrice(pos.slPrice, pos.symbol)}`);
-          if (this.isLiveExecutionActive() && !pos._rolledBack && typeof this.liveExecutionAdapter.modifyStopLoss === 'function') {
-            pos._lastLiveSlSyncAt = nowMs;
-            pos._lastSyncedSlPx = pos.slPrice;
-            Promise.resolve().then(() => this.liveExecutionAdapter.modifyStopLoss({
-              venue: pos.exchange,
-              network: this.liveConfig.network || 'TESTNET',
-              symbol: pos.symbol,
-              side: pos.side,
-              slPrice: pos.slPrice,
-              sizeUsd: pos.sizeUsd,
-              refPrice: px
-            })).catch(() => null);
-          }
+          syncLiveSl(0, 0);
         }
 
-        if (this.riskShield.autoTrailing && pos.beLocked && rMultiple >= 0.95) {
-          const trailDist = Math.max(rtFeeFrac + 0.0014, (pos.initialRiskPct * 0.40) / 100);
+        if ((this.riskShield.autoTrailing || (pos.tpExtensions || 0) > 0) && pos.beLocked && rMultiple >= 0.95) {
+          const trailRatio = (pos.tpExtensions || 0) > 0 ? 0.42 : 0.40;
+          const trailDist = Math.max(rtFeeFrac + 0.0014, (pos.initialRiskPct * trailRatio) / 100);
           let candidateSl = pos.peakPrice * (1 - dir * trailDist);
           candidateSl = dir === 1 ? Math.max(candidateSl, minBeSl) : Math.min(candidateSl, minBeSl);
           if ((dir === 1 && candidateSl > pos.slPrice) || (dir === -1 && candidateSl < pos.slPrice)) {
             pos.slPrice = candidateSl;
             pos.trailingActive = true;
-            const prevSynced = pos._lastSyncedSlPx || 0;
-            const slMoveFrac = prevSynced > 0 ? Math.abs(pos.slPrice - prevSynced) / prevSynced : 1;
-            if (this.isLiveExecutionActive() && !pos._rolledBack && slMoveFrac >= 0.0015 && (nowMs - (pos._lastLiveSlSyncAt || 0)) >= 5000 && typeof this.liveExecutionAdapter.modifyStopLoss === 'function') {
-              pos._lastLiveSlSyncAt = nowMs;
-              pos._lastSyncedSlPx = pos.slPrice;
-              Promise.resolve().then(() => this.liveExecutionAdapter.modifyStopLoss({
-                venue: pos.exchange,
-                network: this.liveConfig.network || 'TESTNET',
-                symbol: pos.symbol,
-                side: pos.side,
-                slPrice: pos.slPrice,
-                sizeUsd: pos.sizeUsd,
-                refPrice: px
-              })).catch(() => null);
+            syncLiveSl(5000, 0.0015);
+          }
+        }
+
+        const maxTpExt = 3;
+        if (this.riskShield.autoExtendTp && pos.tpPrice > 0 && (pos.tpExtensions || 0) < maxTpExt && movePct > (beBuffer * 100) + 0.06) {
+          const tpSpan = dir === 1 ? (pos.tpPrice - pos.entryPrice) : (pos.entryPrice - pos.tpPrice);
+          const curGain = dir === 1 ? (px - pos.entryPrice) : (pos.entryPrice - px);
+          const tpProgress = tpSpan > 0 ? (curGain / tpSpan) : 0;
+          if (tpProgress >= 0.80 && curGain > 0) {
+            const sig = this.market.getDirectionalSignal(pos.symbol);
+            const effectiveScore = sig ? (sig.trendScore ?? sig.score ?? 0) : 0;
+            const alignedScore = dir * effectiveScore;
+            const trendEfficiency = sig && Number.isFinite(sig.efficiencyRatio) ? sig.efficiencyRatio : 1;
+            const htf5mOpposing = dir === 1 ? sig?.htf5m?.bias === 'BEAR' : sig?.htf5m?.bias === 'BULL';
+            const htf15mOpposing = dir === 1 ? sig?.htf15m?.bias === 'BEAR' : sig?.htf15m?.bias === 'BULL';
+            if (sig && !sig.spikeBlocked && alignedScore >= 34 && trendEfficiency >= 0.30 && !htf5mOpposing && !htf15mOpposing) {
+              const extCount = (pos.tpExtensions || 0) + 1;
+              const stepPct = Math.max(0.45, (pos.initialRiskPct || 0.8) * 0.80);
+              const prevTp = pos.tpPrice;
+              const nextTp = prevTp * (1 + dir * (stepPct / 100));
+              const lockSlRaw = pos.entryPrice + dir * (curGain * 0.68);
+              const nextSl = dir === 1
+                ? Math.max(pos.slPrice || 0, minBeSl, lockSlRaw)
+                : Math.min(pos.slPrice || Infinity, minBeSl, lockSlRaw);
+              pos.initialTpPrice = pos.initialTpPrice || prevTp;
+              pos.tpPrice = nextTp;
+              pos.slPrice = nextSl;
+              pos.beLocked = true;
+              pos.trailingActive = true;
+              pos.tpExtensions = extCount;
+              this._log('SHIELD', `🚀 DYNAMIC TP+${extCount}: ${pos.symbol} #${this._uuid.shortId(pos.id)} xu hướng mạnh (trend ${effectiveScore > 0 ? '+' : ''}${effectiveScore}) — dời TP ${this.market.formatPrice(prevTp, pos.symbol)} → ${this.market.formatPrice(nextTp, pos.symbol)} & khóa SL lãi @ ${this.market.formatPrice(nextSl, pos.symbol)}.`);
+              this._emit('toast', {
+                type: 'pos',
+                title: `🚀 DỜI TP+${extCount} ${pos.symbol}`,
+                msg: `TP → ${this.market.formatPrice(nextTp, pos.symbol)} | SL khóa lãi @ ${this.market.formatPrice(nextSl, pos.symbol)}`
+              });
+              syncLiveSl(0, 0);
             }
           }
         }

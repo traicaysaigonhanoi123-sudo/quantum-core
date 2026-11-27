@@ -116,6 +116,7 @@
       roePct: p.roePct,
       beLocked: Boolean(p.beLocked),
       trailingActive: Boolean(p.trailingActive),
+      tpExtensions: Number(p.tpExtensions) || 0,
       hedgeGroupId: p.hedgeGroupId || null,
       accruedFundingUsd: p.accruedFundingUsd || 0,
       source: p.source
