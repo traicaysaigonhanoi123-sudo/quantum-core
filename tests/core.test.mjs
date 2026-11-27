@@ -1985,3 +1985,100 @@ test('Reload under live WebSocket mode preserves Demo positions across seed-pric
     globalThis.fetch = origFetch;
   }
 });
+
+test('Live signal engine rejects choppy sideways ranges, enforces structure-aware SL floors (no 0.33% BTC noise SL), and applies live post-loss cooldown', () => {
+  let fakeNow = 1_760_000_000_000;
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, { QuantumUUID, QuantumSchemas, nowFn: () => fakeNow });
+  trading.setCapital(500);
+  market.wsEnabled = true;
+
+  // 1. Choppy alternating sideways 1m candles on BTC (ER < 0.25) must stay WAIT even with bullish synthetic flow
+  const chopCandles = [];
+  let cpx = 90000;
+  for (let i = 55; i > 0; i--) {
+    const o = cpx;
+    const step = i % 2 === 0 ? 55 : -53;
+    const c = o + step;
+    chopCandles.push({ t: fakeNow - i * 60000, o, h: Math.max(o, c) + 20, l: Math.min(o, c) - 20, c, v: 900 });
+    cpx = c;
+  }
+  const btcSt = market.getSymbolState('BTC-PERP');
+  btcSt.candles = chopCandles.map((c) => ({ ...c }));
+  btcSt.signalCandles = chopCandles.map((c) => ({ ...c }));
+  btcSt.currentCandle = { ...chopCandles[chopCandles.length - 1] };
+  btcSt.price = cpx;
+  btcSt.flowImbalance = 0.32;
+  btcSt.cvdHistory = [0.2, 0.5, 0.8, 1.1, 1.4];
+  market._rebuildOrderbook(btcSt);
+
+  const chopSig = market.getDirectionalSignal('BTC-PERP');
+  assert.ok(chopSig.efficiencyRatio < 0.25, `Expected low ER for chop, got ${chopSig.efficiencyRatio}`);
+  assert.equal(chopSig.side, 'WAIT', `Choppy sideways market must return WAIT, got ${chopSig.side} (score=${chopSig.score})`);
+
+  // 2. Strong live BTC & altcoin breakdowns must enforce structure-aware SL floors (BTC >= 0.85%, Alt >= 1.05%)
+  const trendBtc = [];
+  let bpx = 91000;
+  for (let i = 55; i > 0; i--) {
+    const o = bpx;
+    const step = i > 18 ? (i % 3 === 0 ? 30 : -24) : (i % 3 === 0 ? 45 : -48);
+    const c = o + step;
+    trendBtc.push({ t: fakeNow - i * 60000, o, h: Math.max(o, c) + 25, l: Math.min(o, c) - 30, c, v: 1300 + i * 10 });
+    bpx = c;
+  }
+  btcSt.candles = trendBtc.map((c) => ({ ...c }));
+  btcSt.signalCandles = trendBtc.map((c) => ({ ...c }));
+  btcSt.currentCandle = { ...trendBtc[trendBtc.length - 1] };
+  btcSt.price = bpx;
+  btcSt.flowImbalance = -0.25;
+  btcSt.cvdHistory = [-0.2, -0.5, -0.8, -1.1, -1.4];
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', bpx, 0.01, -1.4);
+  market._rebuildOrderbook(btcSt);
+
+  const btcSig = market.getDirectionalSignal('BTC-PERP');
+  assert.equal(btcSig.side, 'SHORT', `Expected clean SHORT on BTC breakdown, got ${btcSig.side} (${btcSig.reasons})`);
+  assert.ok(btcSig.suggestedSlPct >= 0.85 && btcSig.suggestedSlPct <= 1.55, `Expected BTC structure SL 0.85-1.55%, got ${btcSig.suggestedSlPct}%`);
+  assert.ok(btcSig.suggestedTpPct >= 1.50 && btcSig.suggestedTpPct <= 3.60, `Expected BTC TP 1.50-3.60%, got ${btcSig.suggestedTpPct}%`);
+
+  const solSt = market.getSymbolState('SOL-PERP');
+  const trendSol = trendBtc.map((c) => ({ ...c, o: c.o / 1000, h: c.h / 1000, l: c.l / 1000, c: c.c / 1000 }));
+  solSt.candles = trendSol.map((c) => ({ ...c }));
+  solSt.signalCandles = trendSol.map((c) => ({ ...c }));
+  solSt.currentCandle = { ...trendSol[trendSol.length - 1] };
+  solSt.price = bpx / 1000;
+  solSt.flowImbalance = -0.25;
+  solSt.cvdHistory = [-0.2, -0.5, -0.8, -1.1, -1.4];
+  market.applyLiveVenueQuote('SOL-PERP', 'BINANCE', bpx / 1000, 0.01, -1.4);
+  market._rebuildOrderbook(solSt);
+
+  const solSig = market.getDirectionalSignal('SOL-PERP');
+  assert.ok(solSig.suggestedSlPct >= 1.05 && solSig.suggestedSlPct <= 1.90, `Expected Alt SL >= 1.05%, got ${solSig.suggestedSlPct}%`);
+
+  // 3. Leverage SL cap allows structure room at 5x while bounding 50x HIGH_RISK at 0.70%
+  assert.ok(trading.getSafeSlCapPct(5, 'BALANCED') >= 1.50);
+  assert.ok(trading.getSafeSlCapPct(50, 'HIGH_RISK') <= 0.70);
+
+  // 4. Live post-loss cooldown blocks immediate revenge re-entry until 60s global / 180s symbol cooldown elapses
+  market._liveWsStarted = true;
+  const pos = trading.placeMarketOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'SHORT',
+    sizeUsd: 150,
+    leverage: 5,
+    slPct: 1.0,
+    tpPct: 2.0,
+    source: 'BOT'
+  });
+  assert.ok(pos);
+  trading.closePosition(pos.id, 'STOP LOSS HIT', pos.slPrice);
+
+  const blockedReentry = trading.executeAiSignalOrder({ symbol: 'BTC-PERP', forceEntry: false, source: 'BOT' });
+  assert.equal(blockedReentry, null, 'Must block immediate re-entry during live post-loss cooldown');
+
+  fakeNow += 65_000; // Global 60s passed, per-symbol 180s still active for BTC-PERP
+  assert.ok(fakeNow < trading.symbolLossCooldownUntil['BTC-PERP']);
+
+  fakeNow += 120_000; // Now past 180s per-symbol cooldown
+  assert.ok(fakeNow >= trading.symbolLossCooldownUntil['BTC-PERP']);
+});

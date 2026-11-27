@@ -64,6 +64,8 @@
       this.botCooldown = 0;
       this.tickCounter = 0;
       this.lastClosedMap = {};
+      this.symbolLossCooldownUntil = {};
+      this.globalLossCooldownUntil = 0;
       this._signalConfirmMap = {};
       this._lastBotEntryTick = -999;
       this.botFocusTarget = null;
@@ -638,6 +640,8 @@
       this.losses = 0;
       this.tickCounter = 0;
       this.lastClosedMap = {};
+      this.symbolLossCooldownUntil = {};
+      this.globalLossCooldownUntil = 0;
       this.riskShield.consecutiveLosses = 0;
       this.riskShield.cooldownUntil = 0;
       this.riskShield.cooldownTicks = 0;
@@ -738,6 +742,8 @@
         ? snap.dailyDateKey
         : this._toLocalDateKey(this._now());
       this.pnlLedger = this._normalizePnlLedger(snap.pnlLedger, this.history);
+      this.symbolLossCooldownUntil = {};
+      this.globalLossCooldownUntil = 0;
       this._signalConfirmMap = {};
       this._lastBotEntryTick = -999;
       this.botFocusTarget = null;
@@ -838,6 +844,8 @@
       this.riskShield.cooldownTicks = 0;
       this.tickCounter = 0;
       this.lastClosedMap = {};
+      this.symbolLossCooldownUntil = {};
+      this.globalLossCooldownUntil = 0;
       this.equityHistory = Array.from({ length: 48 }, () => cap);
       this._syncRiskToCapitalProfile(cap);
       this.resetCircuitBreaker(true);
@@ -1157,17 +1165,30 @@
       const dirPositions = this.positions.filter((p) => !p.hedgeGroupId);
       if (dirPositions.length >= profile.maxConcurrentDirectional) return null;
 
-      // Anti-double-loss guard: never open a 2nd concurrent directional trade too fast or while trade #1 is already losing
+      if (this.market._liveWsStarted && this._now() < (this.globalLossCooldownUntil || 0)) {
+        return null;
+      }
+
+      // Anti-correlated stacking guard: in live mode only scale a 2nd position once position #1 is actively profitable (+0.30%)
       if (dirPositions.length >= 1) {
         if (this.market.wsEnabled && (this.tickCounter - this._lastBotEntryTick) < 24) {
           return null;
         }
-        const losingOpen = dirPositions.some((p) => {
-          const dir = p.side === 'LONG' ? 1 : -1;
-          const movePct = ((p.markPrice - p.entryPrice) / Math.max(1e-9, p.entryPrice)) * 100 * dir;
-          return movePct <= -Math.max(0.08, (p.initialRiskPct || 0.65) * 0.15);
-        });
-        if (losingOpen) return null;
+        if (this.market._liveWsStarted) {
+          const anyNotInProfit = dirPositions.some((p) => {
+            const dir = p.side === 'LONG' ? 1 : -1;
+            const movePct = ((p.markPrice - p.entryPrice) / Math.max(1e-9, p.entryPrice)) * 100 * dir;
+            return movePct < 0.30;
+          });
+          if (anyNotInProfit) return null;
+        } else {
+          const losingOpen = dirPositions.some((p) => {
+            const dir = p.side === 'LONG' ? 1 : -1;
+            const movePct = ((p.markPrice - p.entryPrice) / Math.max(1e-9, p.entryPrice)) * 100 * dir;
+            return movePct <= -Math.max(0.08, (p.initialRiskPct || 0.65) * 0.15);
+          });
+          if (losingOpen) return null;
+        }
       }
 
       const scanOrder = (profile.tier === 'MICRO' || profile.tier === 'INSUFFICIENT')
@@ -1179,6 +1200,9 @@
       let topPreparing = null;
       for (const candSym of scanOrder) {
         if (this._hasSymbolExposure(candSym)) continue;
+        if (this.market._liveWsStarted && this._now() < (this.symbolLossCooldownUntil?.[candSym] || 0)) {
+          continue;
+        }
         const candSt = this.market.getSymbolState(candSym);
         const hasLiveData = Boolean(
           candSt && (
@@ -1386,8 +1410,9 @@
 
     getSafeSlCapPct(leverage, riskMode = this.riskMode) {
       const lev = Math.max(1, Number(leverage) || 5);
-      const levCap = Math.max(0.25, Math.min(0.85, Number((35 / lev).toFixed(2))));
-      if (riskMode === 'SAFE') return Math.min(0.65, levCap);
+      // Allow structure-based SL up to 1.90% at 5x while bounding 50x HIGH_RISK at 0.70%
+      const levCap = Math.max(0.35, Math.min(1.90, Number((35 / lev).toFixed(2))));
+      if (riskMode === 'SAFE') return Math.min(1.35, levCap);
       return levCap;
     }
 
@@ -1457,8 +1482,9 @@
         return { ok: true, effectiveLev, feePct, netRR, maxLossUsd, entryFeeBps };
       }
 
-      if ((this.riskShield.cooldownTicks || 0) > 0 && Date.now() < this.riskShield.cooldownUntil) {
-        const waitSec = Math.max(1, Math.ceil((this.riskShield.cooldownUntil - Date.now()) / 1000));
+      const nowMs = this._now();
+      if ((this.riskShield.cooldownTicks || 0) > 0 && nowMs < this.riskShield.cooldownUntil) {
+        const waitSec = Math.max(1, Math.ceil((this.riskShield.cooldownUntil - nowMs) / 1000));
         return {
           ok: false,
           reason: `Anti-Revenge Cooldown: Tạm nghỉ ${waitSec}s (${this.riskShield.cooldownTicks} ticks) sau 2 lệnh thua liên tiếp để giữ kỷ luật.`
@@ -1848,10 +1874,17 @@
         this.losses++;
         if (!pos.hedgeGroupId) {
           this.riskShield.consecutiveLosses++;
+          const nowTs = this._now();
+          if (this.market._liveWsStarted) {
+            if (!this.symbolLossCooldownUntil) this.symbolLossCooldownUntil = {};
+            this.symbolLossCooldownUntil[pos.symbol] = nowTs + 180000;
+            this.globalLossCooldownUntil = nowTs + 60000;
+          }
           if (this.riskShield.consecutiveLosses >= 2 && this.riskShield.enabled) {
-            this.riskShield.cooldownUntil = Date.now() + 10000;
+            const liveCooldownMs = this.market._liveWsStarted ? 180000 : 10000;
+            this.riskShield.cooldownUntil = nowTs + liveCooldownMs;
             this.riskShield.cooldownTicks = 40;
-            this._log('SHIELD', 'Anti-Revenge Trigger: Tạm khóa đặt lệnh mới 40 nhịp (~10s) sau 2 lệnh lỗ liên tiếp.');
+            this._log('SHIELD', `Anti-Revenge Trigger: Tạm khóa đặt lệnh mới ${this.market._liveWsStarted ? '3 phút' : '40 nhịp (~10s)'} sau 2 lệnh lỗ liên tiếp.`);
           }
         }
       }

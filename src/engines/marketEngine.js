@@ -1336,6 +1336,35 @@
       return { bias, spreadPct, slopePct, atr5mPct, barsCount: bars5m.length };
     }
 
+    _compute15mTrend(st, candles1m) {
+      const real15m = Array.isArray(st?.tfCandles?.['15m']) && st.tfCandles['15m'].length >= 15
+        ? st.tfCandles['15m']
+        : null;
+      const bars15m = real15m || this._aggregateCandles(candles1m, 15);
+      if (bars15m.length < 8) {
+        return { bias: 'NEUTRAL', spreadPct: 0, slopePct: 0, barsCount: bars15m.length };
+      }
+      const closes = bars15m.map((b) => b.c);
+      const calcEma = (arr, period) => {
+        const k = 2 / (period + 1);
+        const res = [arr[0]];
+        for (let i = 1; i < arr.length; i++) res.push(arr[i] * k + res[i - 1] * (1 - k));
+        return res;
+      };
+      const ema5 = calcEma(closes, 5);
+      const ema13 = calcEma(closes, 13);
+      const m = closes.length;
+      const spreadPct = ((ema5[m - 1] - ema13[m - 1]) / Math.max(1e-9, ema13[m - 1])) * 100;
+      const prevIdx = Math.max(0, m - 3);
+      const slopePct = ((closes[m - 1] - closes[prevIdx]) / Math.max(1e-9, closes[prevIdx])) * 100;
+
+      let bias = 'NEUTRAL';
+      if (spreadPct > 0.06 && slopePct >= -0.04) bias = 'BULL';
+      else if (spreadPct < -0.06 && slopePct <= 0.04) bias = 'BEAR';
+
+      return { bias, spreadPct, slopePct, barsCount: bars15m.length };
+    }
+
     _detectVolatilitySpike(recentCandles, atrPct, st) {
       if (!Array.isArray(recentCandles) || recentCandles.length < 4) {
         return { active: false, reason: '', maxRangePct: 0, wickRatio: 0 };
@@ -1499,34 +1528,60 @@
       let suggestedSlPct;
       let suggestedTpPct;
       let htf5m = { bias: 'NEUTRAL', aligned: false, spreadPct: 0, slopePct: 0, atr5mPct: 0.2, barsCount: 0 };
+      let htf15m = { bias: 'NEUTRAL', aligned: false, spreadPct: 0, slopePct: 0, barsCount: 0 };
+      let efficiencyRatio = 1;
       let spikeBlocked = false;
       let spikeReason = '';
 
       let entryWarn = '';
       if (this.wsEnabled) {
-        // ATR-normalized scoring tuned for real exchange 1m candles (prevents under-scoring 0.08%-0.15% ATR moves)
+        // ATR-normalized scoring tuned for real exchange 1m candles, with bounded synthetic flow contribution
         const normAtr = Math.max(0.06, atrPct);
         const normTrend = (emaSpread821Pct / normAtr) * 26 + (emaSpread2150Pct / normAtr) * 10 + (emaSlopePct / normAtr) * 34;
         const normMacd = (macdHistPct / normAtr) * 42 + (macdAccelPct / normAtr) * 48;
         const flowLeadScore =
-          (bidRatio - 0.5) * 150 +
-          Math.max(-18, Math.min(18, cvdSlope * 10)) +
-          Math.max(-12, Math.min(12, (st.netFlowPerSec || 0) * 8));
+          Math.max(-9, Math.min(9, (bidRatio - 0.5) * 45)) +
+          Math.max(-5, Math.min(5, cvdSlope * 4)) +
+          Math.max(-4, Math.min(4, (st.netFlowPerSec || 0) * 3));
 
         rawScore = normTrend + normMacd + flowLeadScore;
+
+        // Kaufman Efficiency Ratio (ER) choppiness filter over recent 16 bars
+        const erLookback = Math.min(16, n - 1);
+        if (erLookback >= 6) {
+          const netMove = Math.abs(closes[n - 1] - closes[n - 1 - erLookback]);
+          let pathLen = 0;
+          for (let i = n - erLookback; i < n; i++) {
+            pathLen += Math.abs(closes[i] - closes[i - 1]);
+          }
+          efficiencyRatio = pathLen > 1e-9 ? netMove / pathLen : 0;
+          if (efficiencyRatio < 0.25) {
+            rawScore *= 0.35;
+            entryWarn = 'Sideway nhiễu (ER thấp)';
+          }
+        }
+
+        // EMA50 Structural Gate: avoid buying deep below EMA50 or shorting above EMA50
+        if ((rawScore > 0 && lastClose < ema50 && ema8 < ema50) || (rawScore < 0 && lastClose > ema50 && ema8 > ema50)) {
+          rawScore *= 0.45;
+          if (!entryWarn) entryWarn = 'Ngược cấu trúc EMA50';
+        } else if ((rawScore > 0 && ema8 > ema21 && ema21 > ema50) || (rawScore < 0 && ema8 < ema21 && ema21 < ema50)) {
+          rawScore *= 1.12;
+        }
 
         const lastBar = recentCandles[n - 1];
         const barRange = Math.max(1e-9, lastBar.h - lastBar.l);
         const upperWickPct = (lastBar.h - Math.max(lastBar.o, lastBar.c)) / barRange;
         const lowerWickPct = (Math.min(lastBar.o, lastBar.c) - lastBar.l) / barRange;
         const extFromEma21Pct = ((lastClose - ema21) / Math.max(1e-9, ema21)) * 100;
-        const maxSafeExtPct = Math.max(0.65, normAtr * 4.8);
+        const maxSafeLongExtPct = Math.max(0.55, normAtr * 3.8);
+        const maxSafeShortExtPct = Math.max(0.65, normAtr * 4.4);
 
         // Overextension / peak-and-bottom chasing cap
-        if (rawScore > 0 && ((rsi > 76 && zScore > 1.75) || zScore > 2.15 || extFromEma21Pct > maxSafeExtPct)) {
+        if (rawScore > 0 && ((rsi > 70 && zScore > 1.35) || zScore > 1.85 || extFromEma21Pct > maxSafeLongExtPct)) {
           rawScore = Math.min(rawScore, 22);
           entryWarn = 'Chờ hồi (quá mua)';
-        } else if (rawScore < 0 && ((rsi < 22 && zScore < -1.75) || zScore < -2.15 || extFromEma21Pct < -maxSafeExtPct)) {
+        } else if (rawScore < 0 && ((rsi < 22 && zScore < -1.75) || zScore < -2.10 || extFromEma21Pct < -maxSafeShortExtPct)) {
           rawScore = Math.max(rawScore, -22);
           entryWarn = 'Chờ hồi (quá bán)';
         }
@@ -1550,7 +1605,7 @@
           rawScore *= 0.55;
         }
 
-        // Filter 1: Multi-timeframe 5m trend confirmation (blocks counter-trend traps)
+        // Filter 1: Multi-timeframe 5m & 15m trend confirmation (blocks counter-trend traps)
         const computed5m = this._compute5mTrend(srcCandles);
         htf5m = { ...computed5m, aligned: false };
         if (this.mtfFilterEnabled && computed5m.bias !== 'NEUTRAL') {
@@ -1560,6 +1615,19 @@
           } else if ((rawScore > 0 && computed5m.bias === 'BULL') || (rawScore < 0 && computed5m.bias === 'BEAR')) {
             rawScore *= 1.12;
             htf5m.aligned = true;
+          }
+        }
+
+        const computed15m = this._compute15mTrend(st, srcCandles);
+        htf15m = { ...computed15m, aligned: false };
+        if (this.mtfFilterEnabled && computed15m.bias !== 'NEUTRAL') {
+          if ((rawScore > 0 && computed15m.bias === 'BEAR') || (rawScore < 0 && computed15m.bias === 'BULL')) {
+            rawScore *= 0.35;
+            htf15m.aligned = false;
+            if (!entryWarn) entryWarn = 'Ngược khung 15m';
+          } else if ((rawScore > 0 && computed15m.bias === 'BULL') || (rawScore < 0 && computed15m.bias === 'BEAR')) {
+            rawScore *= 1.08;
+            htf15m.aligned = true;
           }
         }
 
@@ -1573,8 +1641,23 @@
           }
         }
 
-        suggestedSlPct = Number(Math.max(0.30, Math.min(0.75, atrPct * 2.6)).toFixed(2));
-        suggestedTpPct = Number(Math.max(0.75, Math.min(2.10, suggestedSlPct * 2.25)).toFixed(2));
+        // Structure-aware Swing SL + coin-class volatility floor so SL sits outside 1m-5m noise wicks
+        const swingSlice = recentCandles.slice(-18);
+        let swingLow = lastClose;
+        let swingHigh = lastClose;
+        for (let i = 0; i < swingSlice.length; i++) {
+          if (swingSlice[i].l < swingLow) swingLow = swingSlice[i].l;
+          if (swingSlice[i].h > swingHigh) swingHigh = swingSlice[i].h;
+        }
+        const isMajorCoin = sym === 'BTC-PERP' || sym === 'ETH-PERP' || sym === 'BNB-PERP';
+        const slFloor = isMajorCoin ? 0.85 : 1.05;
+        const slCeil = isMajorCoin ? 1.55 : 1.90;
+        const swingDistPct = rawScore >= 0
+          ? ((lastClose - swingLow) / Math.max(1e-9, lastClose)) * 100
+          : ((swingHigh - lastClose) / Math.max(1e-9, lastClose)) * 100;
+        const rawSl = Math.max(atrPct * 4.0, swingDistPct + atrPct * 0.85);
+        suggestedSlPct = Number(Math.max(slFloor, Math.min(slCeil, rawSl)).toFixed(2));
+        suggestedTpPct = Number(Math.max(1.50, Math.min(3.60, suggestedSlPct * 1.85)).toFixed(2));
       } else {
         const extFromEma21Pct = ((lastClose - ema21) / Math.max(1e-9, ema21)) * 100;
         const maxSafeExtPct = Math.max(0.45, atrPct * 3.4);
@@ -1611,9 +1694,12 @@
         : (htf5m.bias === 'BEAR'
           ? (htf5m.aligned ? ' • 5m↓✓' : (score > 0 ? ' • 5m↓ NGƯỢC' : ' • 5m↓'))
           : '');
+      const htf15Tag = htf15m.bias === 'BULL'
+        ? (htf15m.aligned ? ' • 15m↑✓' : ' • 15m↑')
+        : (htf15m.bias === 'BEAR' ? (htf15m.aligned ? ' • 15m↓✓' : ' • 15m↓') : '');
       const spikeTag = spikeBlocked ? ' • ⚡ LỌC TIN' : '';
       const warnTag = (!spikeBlocked && entryWarn && side === 'WAIT') ? ` • 🛡 ${entryWarn}` : '';
-      const reasons = `${emaTag} • Bid ${bidPct}% • ${cvdTag} • Z ${zScore.toFixed(1)} • RSI ${Math.round(rsi)}${htfTag}${spikeTag}${warnTag}`;
+      const reasons = `${emaTag} • ER ${efficiencyRatio.toFixed(2)} • ${cvdTag} • Z ${zScore.toFixed(1)} • RSI ${Math.round(rsi)}${htfTag}${htf15Tag}${spikeTag}${warnTag}`;
 
       return {
         score,
@@ -1625,11 +1711,13 @@
         rsi,
         zScore,
         atrPct,
+        efficiencyRatio,
         bbMean,
         emaSlopePct,
         cvdSlope,
         bidRatio,
         htf5m,
+        htf15m,
         spikeBlocked,
         spikeReason
       };
