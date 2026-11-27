@@ -27,7 +27,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="src/styles/terminal.css?v=20261127b" />
+  <link rel="stylesheet" href="src/styles/terminal.css?v=20261127c" />
 </head>
 <body>
   <!-- Background Ambient Grid -->
@@ -524,31 +524,33 @@
               <span class="chart-ohlc" id="chartOhlc">O: -- H: -- L: -- C: --</span>
             </div>
             <div class="chart-hdr-right">
-              <div class="tf-group" id="tfGroup">
-                <button class="tf-btn" data-tf="1s">1s</button>
-                <button class="tf-btn" data-tf="5s">5s</button>
-                <button class="tf-btn active" data-tf="1m">1m</button>
-                <button class="tf-btn" data-tf="5m">5m</button>
-                <button class="tf-btn" data-tf="15m">15m</button>
-                <button class="tf-btn" data-tf="30m">30m</button>
-                <button class="tf-btn" data-tf="1h">1h</button>
-              </div>
               <button type="button" class="btn btn-xs btn-ghost" id="btnResetZoom" title="Đặt lại khung zoom nến">Reset Zoom</button>
               <button type="button" class="btn btn-xs btn-cyan-outline" id="btnToggleForecast" title="Bật/tắt lớp dự đoán điểm sắp vào lệnh của AI trên biểu đồ">🔮 Dự đoán: ON</button>
               <span class="chart-hint">Lăn chuột Zoom nến • Click nến đặt Limit</span>
             </div>
           </div>
-          <div class="chart-open-pos-bar hidden" id="chartOpenPosBar" aria-label="Biểu đồ các coin đang có vị thế"></div>
-          <div class="chart-forecast-bar" id="chartForecastBar" aria-live="polite">
-            <span class="cf-tf-badge" id="cfTfBadge">PHÂN TÍCH 1M</span>
-            <span class="cf-dir-pill sideways" id="cfDirBadge">↔ ĐANG PHÂN TÍCH...</span>
-            <div class="cf-prob-wrap" title="Xác suất hướng lên / xuống theo khung nến đang chọn">
-              <div class="cf-prob-track"><div class="cf-prob-up" id="cfProbFillUp" style="width:50%"></div></div>
-              <span class="cf-prob-txt" id="cfProbText">Lên 50% / Xuống 50%</span>
+          <div class="chart-tf-strip">
+            <div class="tf-group" id="tfGroup" role="group" aria-label="Chọn khung thời gian nến">
+              <button type="button" class="tf-btn" data-tf="1s">1s</button>
+              <button type="button" class="tf-btn" data-tf="5s">5s</button>
+              <button type="button" class="tf-btn active" data-tf="1m">1m</button>
+              <button type="button" class="tf-btn" data-tf="5m">5m</button>
+              <button type="button" class="tf-btn" data-tf="15m">15m</button>
+              <button type="button" class="tf-btn" data-tf="30m">30m</button>
+              <button type="button" class="tf-btn" data-tf="1h">1h</button>
             </div>
-            <span class="cf-target" id="cfTargetText">Mục tiêu: --</span>
-            <span class="cf-reason muted" id="cfReasonText">--</span>
+            <div class="chart-forecast-bar" id="chartForecastBar" aria-live="polite">
+              <span class="cf-tf-badge" id="cfTfBadge">KHUNG 1M</span>
+              <span class="cf-dir-pill sideways" id="cfDirBadge">↔ ĐANG PHÂN TÍCH...</span>
+              <div class="cf-prob-wrap" title="Xác suất hướng lên / xuống theo khung nến đang chọn">
+                <div class="cf-prob-track"><div class="cf-prob-up" id="cfProbFillUp" style="width:50%"></div></div>
+                <span class="cf-prob-txt" id="cfProbText">Lên 50% / Xuống 50%</span>
+              </div>
+              <span class="cf-target" id="cfTargetText">Mục tiêu: --</span>
+              <span class="cf-reason muted" id="cfReasonText">--</span>
+            </div>
           </div>
+          <div class="chart-open-pos-bar hidden" id="chartOpenPosBar" aria-label="Biểu đồ các coin đang có vị thế"></div>
           <div class="chart-canvas-wrap" id="chartCanvasWrap">
             <canvas id="candleChartCanvas"></canvas>
             <div class="chart-tooltip hidden" id="chartTooltip"></div>
@@ -1457,19 +1459,19 @@
   <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.15/dist/ScrollTrigger.min.js"></script>
 
   <!-- Core Data & Security Modules (UMD) -->
-  <script defer src="src/core/uuid.js?v=20261127b"></script>
-  <script defer src="src/core/schemas.js?v=20261127b"></script>
-  <script defer src="src/core/securityGate.js?v=20261127b"></script>
-  <script defer src="src/core/accountAuth.js?v=20261127b"></script>
+  <script defer src="src/core/uuid.js?v=20261127c"></script>
+  <script defer src="src/core/schemas.js?v=20261127c"></script>
+  <script defer src="src/core/securityGate.js?v=20261127c"></script>
+  <script defer src="src/core/accountAuth.js?v=20261127c"></script>
 
   <!-- Domain Engines (UMD) -->
-  <script defer src="src/engines/marketEngine.js?v=20261127b"></script>
-  <script defer src="src/engines/tradingEngine.js?v=20261127b"></script>
+  <script defer src="src/engines/marketEngine.js?v=20261127c"></script>
+  <script defer src="src/engines/tradingEngine.js?v=20261127c"></script>
 
   <!-- UI Controllers & 60FPS Renderers -->
-  <script defer src="src/ui/visualizers.js?v=20261127b"></script>
-  <script defer src="src/ui/motionController.js?v=20261127b"></script>
-  <script defer src="src/ui/commandPalette.js?v=20261127b"></script>
-  <script defer src="src/ui/app.js?v=20261127b"></script>
+  <script defer src="src/ui/visualizers.js?v=20261127c"></script>
+  <script defer src="src/ui/motionController.js?v=20261127c"></script>
+  <script defer src="src/ui/commandPalette.js?v=20261127c"></script>
+  <script defer src="src/ui/app.js?v=20261127c"></script>
 </body>
 </html>
