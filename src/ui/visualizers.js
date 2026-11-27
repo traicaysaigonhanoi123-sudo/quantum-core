@@ -15,19 +15,85 @@
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
-  function fitCanvas(canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(10, Math.floor(rect.width));
-    const h = Math.max(10, Math.floor(rect.height));
-    if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-    }
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    return { ctx, w, h };
+  const canvasSizeCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  const observedCanvases = typeof Set !== 'undefined' ? new Set() : null;
+  const canvasResizeObserver = typeof ResizeObserver !== 'undefined'
+    ? new ResizeObserver((entries) => {
+        if (!canvasSizeCache) return;
+        for (let i = 0; i < entries.length; i++) {
+          const entry = canvasSizeCache.get(entries[i].target);
+          if (entry) entry.dirty = true;
+        }
+      })
+    : null;
+
+  function invalidateCanvasSizes() {
+    if (!canvasSizeCache || !observedCanvases) return;
+    observedCanvases.forEach((canvas) => {
+      const entry = canvasSizeCache.get(canvas);
+      if (entry) entry.dirty = true;
+    });
   }
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', invalidateCanvasSizes, { passive: true });
+  }
+
+  function fitCanvas(canvas) {
+    if (!canvas || canvas.offsetParent === null) return null;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let entry = canvasSizeCache ? canvasSizeCache.get(canvas) : null;
+
+    if (!entry || entry.dirty || entry.dpr !== dpr || !canvasResizeObserver) {
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.floor(rect.width);
+      const h = Math.floor(rect.height);
+      if (w < 12 || h < 12) {
+        if (entry) entry.dirty = true;
+        return null;
+      }
+      const pw = Math.floor(w * dpr);
+      const ph = Math.floor(h * dpr);
+      if (canvas.width !== pw || canvas.height !== ph) {
+        canvas.width = pw;
+        canvas.height = ph;
+      }
+      const ctx = entry ? entry.ctx : canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!entry) {
+        entry = { w, h, dpr, ctx, dirty: false };
+        if (canvasSizeCache) canvasSizeCache.set(canvas, entry);
+        if (observedCanvases) observedCanvases.add(canvas);
+        if (canvasResizeObserver) canvasResizeObserver.observe(canvas);
+      } else {
+        entry.w = w;
+        entry.h = h;
+        entry.dpr = dpr;
+        entry.dirty = false;
+      }
+    }
+
+    if (entry.w < 12 || entry.h < 12) return null;
+    entry.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx: entry.ctx, w: entry.w, h: entry.h };
+  }
+
+  const SPHERE_PALETTE_SPECS = {
+    GOLD:   { rgb: '251, 191, 36',  dot: '#fde68a' },
+    CYAN:   { rgb: '0, 240, 255',   dot: '#67e8f9' },
+    GREEN:  { rgb: '52, 211, 153',  dot: '#6ee7b7' },
+    RED:    { rgb: '255, 59, 107',  dot: '#fda4af' },
+    VIOLET: { rgb: '167, 139, 250', dot: '#ddd6fe' }
+  };
+  const SPHERE_ALPHA_LEVELS = [0.16, 0.28, 0.42, 0.58, 0.74, 0.90];
+  const SPHERE_PALETTE_BUCKETS = {};
+  Object.keys(SPHERE_PALETTE_SPECS).forEach((role) => {
+    const spec = SPHERE_PALETTE_SPECS[role];
+    SPHERE_PALETTE_BUCKETS[role] = {
+      dot: spec.dot,
+      strokes: SPHERE_ALPHA_LEVELS.map((a) => `rgba(${spec.rgb}, ${a})`)
+    };
+  });
 
   class CandlestickChartRenderer {
     constructor(canvas, market, trading, onChartClickPrice) {
@@ -92,7 +158,9 @@
     }
 
     render(timeMs = 0) {
-      const { ctx, w, h } = fitCanvas(this.canvas);
+      const fitted = fitCanvas(this.canvas);
+      if (!fitted) return;
+      const { ctx, w, h } = fitted;
       const st = this.market.getSymbolState();
       const candles = typeof this.market.getVenueCandles === 'function'
         ? this.market.getVenueCandles(st.symbol, this.market.activeExchange).slice(-this.visibleCount)
@@ -537,22 +605,25 @@
         const cpY = entryY + (arrowEndY - entryY) * 0.22;
 
         ctx.strokeStyle = mainCol;
-        ctx.lineWidth = isReady ? 2.1 : 1.5;
-        ctx.globalAlpha = isReady ? 0.95 : 0.65;
         if (isReady) {
           ctx.setLineDash([5, 3]);
           ctx.lineDashOffset = -((timeMs || 0) * 0.024) % 16;
-          ctx.shadowColor = mainCol;
-          ctx.shadowBlur = 8;
+          ctx.lineWidth = 4.4;
+          ctx.globalAlpha = 0.20;
+          ctx.beginPath();
+          ctx.moveTo(lastCandleX, entryY);
+          ctx.quadraticCurveTo(cpX, cpY, arrowEndX, arrowEndY);
+          ctx.stroke();
         } else {
           ctx.setLineDash([4, 4]);
         }
+        ctx.lineWidth = isReady ? 2.1 : 1.5;
+        ctx.globalAlpha = isReady ? 0.95 : 0.65;
         ctx.beginPath();
         ctx.moveTo(lastCandleX, entryY);
         ctx.quadraticCurveTo(cpX, cpY, arrowEndX, arrowEndY);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.shadowBlur = 0;
 
         // Arrowhead aligned with tangent at end of curve
         const ang = Math.atan2(arrowEndY - cpY, arrowEndX - cpX);
@@ -660,7 +731,7 @@
       this._downY = 0;
 
       this.filaments = [];
-      const N = 312;
+      const N = 216;
       const goldenAngle = Math.PI * (3 - Math.sqrt(5));
       for (let i = 0; i < N; i++) {
         const y = 1 - (i / (N - 1)) * 2;
@@ -686,6 +757,7 @@
           thickness: 0.55 + Math.random() * 0.9
         });
       }
+      this._projectedPool = this.filaments.map(() => ({ innerX: 0, innerY: 0, px: 0, py: 0, z: 0, f: null }));
 
       this.packets = [];
       for (let v = 0; v < 5; v++) {
@@ -830,7 +902,9 @@
     }
 
     render(timeMs) {
-      const { ctx, w, h } = fitCanvas(this.canvas);
+      const fitted = fitCanvas(this.canvas);
+      if (!fitted) return;
+      const { ctx, w, h } = fitted;
       const st = this.market.getSymbolState();
       const shock = this.market.shockIntensity;
       const t = timeMs * 0.001;
@@ -846,7 +920,7 @@
         (w < 540 && !document.documentElement.classList.contains('desktop-viewport-mode'))
       );
 
-      const rightPanelW = isMobileStacked ? 0 : (w < 620 ? 190 : 254);
+      const rightPanelW = isMobileStacked ? 0 : (w < 640 ? 204 : 226);
       const availW = isMobileStacked ? w : Math.max(180, w - rightPanelW);
       const cx = isMobileStacked ? w * 0.65 : availW * 0.50;
       const cy = isMobileStacked ? h * 0.47 : h * 0.51;
@@ -888,9 +962,10 @@
 
       const cosY = Math.cos(this.rotY), sinY = Math.sin(this.rotY);
       const cosX = Math.cos(this.rotX), sinX = Math.sin(this.rotX);
+      const step = (isMobileStacked || w < 540) ? 2 : 1;
       const projected = [];
 
-      for (let i = 0; i < this.filaments.length; i++) {
+      for (let i = 0; i < this.filaments.length; i += step) {
         const f = this.filaments[i];
         const x1 = f.x * cosY - f.z * sinY;
         const z1 = f.x * sinY + f.z * cosY;
@@ -901,36 +976,27 @@
         const len = f.baseLen * breath * (1 + (f.role === 'RED' ? shock * 0.35 : 0));
 
         const persp = 2.6 / (2.6 - z2 * 0.65);
-        const px = cx + x1 * radius * len * persp;
-        const py = cy + y2 * radius * len * persp;
-        const innerX = cx + x1 * radius * 0.12 * persp;
-        const innerY = cy + y2 * radius * 0.12 * persp;
-
-        projected.push({ innerX, innerY, px, py, z: z2, f });
+        const slot = this._projectedPool[i];
+        slot.innerX = cx + x1 * radius * 0.12 * persp;
+        slot.innerY = cy + y2 * radius * 0.12 * persp;
+        slot.px = cx + x1 * radius * len * persp;
+        slot.py = cy + y2 * radius * len * persp;
+        slot.z = z2;
+        slot.f = f;
+        projected.push(slot);
       }
 
       projected.sort((a, b) => a.z - b.z);
 
-      const palette = {
-        GOLD:   { line: 'rgba(251, 191, 36,', dot: '#fde68a' },
-        CYAN:   { line: 'rgba(0, 240, 255,',  dot: '#67e8f9' },
-        GREEN:  { line: 'rgba(52, 211, 153,', dot: '#6ee7b7' },
-        RED:    { line: 'rgba(255, 59, 107,', dot: '#fda4af' },
-        VIOLET: { line: 'rgba(167, 139, 250,',dot: '#ddd6fe' }
-      };
-
       for (let i = 0; i < projected.length; i++) {
         const p = projected[i];
         const depthAlpha = Math.max(0.14, Math.min(0.92, (p.z + 1.2) * 0.44));
+        const bucketIdx = Math.min(5, Math.max(0, Math.floor(((depthAlpha - 0.14) / 0.78) * 5.99)));
         const roleKey = (shock > 0.35 && i % 3 === 0) ? 'RED' : p.f.role;
-        const pal = palette[roleKey];
+        const pal = SPHERE_PALETTE_BUCKETS[roleKey];
 
-        const grad = ctx.createLinearGradient(p.innerX, p.innerY, p.px, p.py);
-        grad.addColorStop(0, `${pal.line} ${(depthAlpha * 0.12).toFixed(2)})`);
-        grad.addColorStop(0.55, `${pal.line} ${(depthAlpha * 0.52).toFixed(2)})`);
-        grad.addColorStop(1, `${pal.line} ${(depthAlpha * 0.95).toFixed(2)})`);
-
-        ctx.strokeStyle = grad;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = pal.strokes[bucketIdx];
         ctx.lineWidth = p.f.thickness * (p.z > 0.2 ? 1.25 : 0.8);
         ctx.beginPath();
         ctx.moveTo(p.innerX, p.innerY);
@@ -943,8 +1009,8 @@
         ctx.beginPath();
         ctx.arc(p.px, p.py, dotR, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = 1;
       }
+      ctx.globalAlpha = 1;
 
       const nucGrad = ctx.createRadialGradient(cx, cy, 1, cx, cy, 18);
       nucGrad.addColorStop(0, '#ffffff');
@@ -1002,9 +1068,9 @@
         (w < 540 && !document.documentElement.classList.contains('desktop-viewport-mode'))
       );
 
-      const scale = isMobileStacked
-        ? Math.max(0.98, Math.min(1.18, Math.min(h / 235, w / 330)))
-        : Math.max(0.76, Math.min(1.06, Math.min(h / 250, availW / 360)));
+      let scale = isMobileStacked
+        ? Math.max(0.92, Math.min(1.12, Math.min(h / 235, w / 330)))
+        : Math.max(0.72, Math.min(1.02, Math.min(h / 250, availW / 360)));
 
       // Compute real-time realized + unrealized PnL directly from trading state
       let realized = 0;
@@ -1026,12 +1092,22 @@
         totalPnl = equity - baseEq;
       }
 
+      const pillHBase = openCount > 0 ? 22 : 15;
+      let minBagY = isMobileStacked ? 40 : Math.min(118, h * 0.56);
+      let maxBagY = h - (22 + pillHBase) * scale - 4;
+      if (minBagY > maxBagY) {
+        scale = Math.max(0.58, scale * 0.82);
+        minBagY = isMobileStacked ? 36 : Math.min(108, h * 0.50);
+        maxBagY = Math.max(minBagY, h - (22 + pillHBase) * scale - 3);
+      }
+
       const bagX = isMobileStacked
-        ? Math.max(58, Math.min(82, w * 0.20))
+        ? Math.max(54, Math.min(78, w * 0.19))
         : Math.max(52, Math.min(76, availW * 0.155));
-      const bagY = isMobileStacked
+      const rawBagY = isMobileStacked
         ? h - (openCount > 0 ? 50 : 42) * scale
         : h - (openCount > 0 ? 45 : 39) * scale;
+      const bagY = Math.max(minBagY, Math.min(maxBagY, rawBagY));
       const mouthX = bagX + 1;
       const mouthY = bagY - 17 * scale;
       this._bagHitbox = { x: bagX, y: bagY, r: 28 * scale };
@@ -1058,10 +1134,8 @@
 
       ctx.save();
       strands.forEach((stCurve, idx) => {
-        ctx.strokeStyle = idx === 0 ? 'rgba(251, 191, 36, 0.34)' : 'rgba(251, 191, 36, 0.18)';
+        ctx.strokeStyle = idx === 0 ? 'rgba(251, 191, 36, 0.38)' : 'rgba(251, 191, 36, 0.20)';
         ctx.lineWidth = (idx === 0 ? 1.5 : 1.0) * scale;
-        ctx.shadowColor = '#fbbf24';
-        ctx.shadowBlur = 8;
         ctx.beginPath();
         ctx.moveTo(stCurve.p0.x, stCurve.p0.y);
         ctx.bezierCurveTo(stCurve.p1.x, stCurve.p1.y, stCurve.p2.x, stCurve.p2.y, stCurve.p3.x, stCurve.p3.y);
@@ -1138,15 +1212,8 @@
         const rx = r * spinFactor;
         const ry = r;
 
-        const coinGrad = ctx.createRadialGradient(pos.x - rx * 0.25, pos.y - ry * 0.25, 0.5, pos.x, pos.y, r);
-        coinGrad.addColorStop(0, '#fef08a');
-        coinGrad.addColorStop(0.65, '#f59e0b');
-        coinGrad.addColorStop(1, '#b45309');
-
-        ctx.shadowColor = coin.isBurst ? '#fde047' : '#fbbf24';
-        ctx.shadowBlur = coin.isBurst ? 12 : 7;
-        ctx.fillStyle = coinGrad;
-        ctx.strokeStyle = '#fffbeb';
+        ctx.fillStyle = coin.isBurst ? '#fbbf24' : '#f59e0b';
+        ctx.strokeStyle = '#fef08a';
         ctx.lineWidth = 0.9 * scale;
         ctx.beginPath();
         ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
@@ -1154,7 +1221,6 @@
         ctx.stroke();
 
         if (spinFactor > 0.55) {
-          ctx.shadowBlur = 0;
           ctx.fillStyle = '#451a03';
           ctx.font = `800 ${Math.max(7, Math.round(7.8 * scale))}px "JetBrains Mono", monospace`;
           ctx.textAlign = 'center';
@@ -1221,8 +1287,6 @@
       bellyGrad.addColorStop(0.58, '#b91c1c');
       bellyGrad.addColorStop(1, '#7f1d1d');
 
-      ctx.shadowColor = 'rgba(251, 191, 36, 0.35)';
-      ctx.shadowBlur = 10;
       ctx.fillStyle = bellyGrad;
       ctx.strokeStyle = 'rgba(251, 191, 36, 0.88)';
       ctx.lineWidth = 1.35 * scale;
@@ -1234,7 +1298,6 @@
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      ctx.shadowBlur = 0;
 
       // Subtle silk sheen on the left belly
       ctx.fillStyle = 'rgba(254, 226, 226, 0.16)';
@@ -1292,8 +1355,6 @@
         ctx.save();
         ctx.globalAlpha = sp.alpha;
         ctx.fillStyle = '#fef08a';
-        ctx.shadowColor = '#fbbf24';
-        ctx.shadowBlur = 6;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2);
         ctx.fill();
@@ -1354,8 +1415,8 @@
 
       const pw = Math.max(mainW, subW) + 12 * scale;
       const ph = (subText ? 22 : 15) * scale;
-      const px = Math.max(6, bagX - pw * 0.5);
-      const py = bagY + 20 * scale;
+      const px = Math.max(6, Math.min(availW - pw - 6, bagX - pw * 0.5));
+      const py = Math.min(h - ph - 3, bagY + 20 * scale);
       const pillCx = px + pw * 0.5;
 
       this._drawRoundedRect(ctx, px, py, pw, ph, 4 * scale);
@@ -1405,10 +1466,6 @@
           ctx.strokeStyle = baseColor;
           ctx.globalAlpha = isSelected ? (s === 1 ? 0.85 : 0.42) : (s === 1 ? 0.52 : 0.22);
           ctx.lineWidth = isSelected ? (s === 1 ? 2.1 : 1.0) : (s === 1 ? 1.4 : 0.75);
-          if (s === 1) {
-            ctx.shadowColor = baseColor;
-            ctx.shadowBlur = isSelected ? 10 : 5;
-          }
           ctx.beginPath();
           ctx.moveTo(startX, startY);
           ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, targetX, targetY);
@@ -1442,14 +1499,17 @@
         const bx = omt * omt * omt * x0 + 3 * omt * omt * u * x1 + 3 * omt * u * u * x2 + u * u * u * targetX;
         const by = omt * omt * omt * y0 + 3 * omt * omt * u * y1 + 3 * omt * u * u * y2 + u * u * u * targetY;
 
-        ctx.save();
-        ctx.fillStyle = shock > 0.35 ? '#fecdd3' : '#ffffff';
-        ctx.shadowColor = shock > 0.35 ? '#ff3b6b' : ex.color;
-        ctx.shadowBlur = 8;
+        ctx.fillStyle = shock > 0.35 ? '#ff3b6b' : ex.color;
+        ctx.globalAlpha = 0.28;
         ctx.beginPath();
-        ctx.arc(bx, by, 2.2, 0, Math.PI * 2);
+        ctx.arc(bx, by, 4.2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
+
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = shock > 0.35 ? '#fecdd3' : '#ffffff';
+        ctx.beginPath();
+        ctx.arc(bx, by, 2.0, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
   }
@@ -1462,7 +1522,9 @@
     }
 
     render(timeMs) {
-      const { ctx, w, h } = fitCanvas(this.canvas);
+      const fitted = fitCanvas(this.canvas);
+      if (!fitted) return;
+      const { ctx, w, h } = fitted;
       const st = this.market.getSymbolState();
       const shock = this.market.shockIntensity;
       this.angle += 0.012 + shock * 0.03;
@@ -1551,18 +1613,30 @@
       this.sparkCanvas = sparkCanvas;
       this.market = market;
       this.trading = trading;
+      this._lastCvdSig = '';
+      this._lastSparkSig = '';
     }
 
-    render() {
-      this._renderCvd();
-      this._renderEquitySpark();
+    invalidate() {
+      this._lastCvdSig = '';
+      this._lastSparkSig = '';
     }
 
-    _renderCvd() {
-      const { ctx, w, h } = fitCanvas(this.cvdCanvas);
+    render(force = false) {
+      this._renderCvd(force);
+      this._renderEquitySpark(force);
+    }
+
+    _renderCvd(force = false) {
+      const fitted = fitCanvas(this.cvdCanvas);
+      if (!fitted) return;
+      const { ctx, w, h } = fitted;
       const st = this.market.getSymbolState();
       const data = st.cvdHistory;
       if (data.length < 2) return;
+      const sig = `${st.symbol}|${w}x${h}|${data.length}|${data[data.length - 1].toFixed(3)}|${data[data.length - 2].toFixed(3)}`;
+      if (!force && sig === this._lastCvdSig) return;
+      this._lastCvdSig = sig;
 
       ctx.fillStyle = '#06090f';
       ctx.fillRect(0, 0, w, h);
@@ -1609,10 +1683,15 @@
       ctx.restore();
     }
 
-    _renderEquitySpark() {
-      const { ctx, w, h } = fitCanvas(this.sparkCanvas);
+    _renderEquitySpark(force = false) {
+      const fitted = fitCanvas(this.sparkCanvas);
+      if (!fitted) return;
+      const { ctx, w, h } = fitted;
       const eq = this.trading.equityHistory;
       if (eq.length < 2) return;
+      const sig = `${w}x${h}|${eq.length}|${eq[eq.length - 1].toFixed(2)}|${eq[0].toFixed(2)}`;
+      if (!force && sig === this._lastSparkSig) return;
+      this._lastSparkSig = sig;
 
       ctx.clearRect(0, 0, w, h);
       let min = Math.min(...eq);
@@ -1639,6 +1718,7 @@
     CandlestickChartRenderer,
     RadialSphereAndConduitsRenderer,
     VolatilityRadarRenderer,
-    CvdAndSparkRenderer
+    CvdAndSparkRenderer,
+    invalidateCanvasSizes
   };
 })(window);

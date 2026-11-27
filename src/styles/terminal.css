@@ -183,8 +183,8 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   align-items: center;
   justify-content: space-between;
   flex-wrap: nowrap;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 6px;
+  padding: 0 10px;
   background: #0a0d13;
   border-bottom: 1px solid var(--border-dim);
 }
@@ -250,8 +250,9 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   align-items: center;
   gap: 5px;
   flex-wrap: nowrap;
+  flex: 1 1 auto;
   overflow-x: auto;
-  min-width: 0;
+  min-width: 110px;
   scrollbar-width: none;
 }
 .topbar-instruments::-webkit-scrollbar { display: none; }
@@ -285,7 +286,7 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-shrink: 0;
 }
 .mode-switch {
@@ -363,7 +364,9 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   background: #080b11;
   border-bottom: 1px solid var(--border-dim);
   overflow-x: auto;
+  scrollbar-width: none;
 }
+.exchange-strip::-webkit-scrollbar { display: none; }
 .exchange-pills {
   display: flex;
   align-items: center;
@@ -421,10 +424,10 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   position: relative;
   z-index: 10;
   display: grid;
-  grid-template-columns: 284px minmax(0, 1fr) 268px;
+  grid-template-columns: 278px minmax(0, 1fr) 260px;
   gap: 8px;
   padding: 8px;
-  height: max(calc(100vh - 68px), 640px);
+  height: max(calc(100vh - 68px), 710px);
   align-items: stretch;
 }
 
@@ -585,7 +588,7 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px 6px;
+  padding: 6px 9px 5px;
   gap: 8px;
 }
 .kpi-label {
@@ -596,7 +599,7 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 }
 .kpi-big-num {
   font-family: var(--font-mono);
-  font-size: 21px;
+  font-size: 19.5px;
   font-weight: 700;
   letter-spacing: -0.03em;
   color: #f8fafc;
@@ -623,7 +626,7 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 }
 .mini-stat {
   background: #0b0e14;
-  padding: 5px 9px;
+  padding: 4px 8px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -644,7 +647,7 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 .kpp-cell {
   background: #090d14;
   border: none;
-  padding: 5px 6px;
+  padding: 4px 6px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -686,12 +689,12 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 
 /* Adaptive Capital Tier Bar */
 .capital-bar {
-  padding: 5px 8px;
+  padding: 4px 8px;
   background: #090c12;
   border-top: 1px solid var(--border-dim);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 .cap-top-row {
   display: flex;
@@ -1254,16 +1257,18 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 /* ==================== CENTER COLUMN ==================== */
 .center-top-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 226px;
+  grid-template-columns: minmax(0, 1fr) 216px;
   gap: 8px;
-  flex: 0 0 35%;
-  min-height: 205px;
+  flex: 1.08 1 40%;
+  min-height: 250px;
 }
 .chart-panel, .radar-panel, .blotter-panel, .flow-chart-panel {
   height: 100%;
 }
 
-.chart-hdr-left, .chart-hdr-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chart-panel .panel-hdr { min-height: 28px; }
+.chart-hdr-left { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.chart-hdr-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .chart-ohlc {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -1437,8 +1442,8 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 
 /* ==================== CENTER HERO: 3D RADIAL SPHERE + CONDUITS ==================== */
 .sphere-hero-panel {
-  flex: 1 1 39%;
-  min-height: 225px;
+  flex: 0.92 1 34%;
+  min-height: 210px;
 }
 .sphere-hdr-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1; }
 .panel-sub-note { font-size: 9.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1469,11 +1474,11 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 
 .sphere-hud-overlay {
   position: absolute;
-  left: 10px;
-  top: 10px;
+  left: 8px;
+  top: 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   pointer-events: none;
   z-index: 4;
 }
@@ -1481,24 +1486,24 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   background: #0c1018;
   border: 1px solid var(--border-dim);
   border-left: 2px solid var(--cyan);
-  padding: 4px 8px;
+  padding: 3px 7px;
   border-radius: var(--radius);
   font-family: var(--font-mono);
 }
-.sh-lbl { display: block; font-size: 8px; color: var(--text-muted); }
-.sh-val { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sh-lbl { display: block; font-size: 7.5px; color: var(--text-muted); }
+.sh-val { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* Right-Side Connected Exchange Cards (Targeted by Canvas Bezier Splines) */
 .venue-cards-stack {
   position: absolute;
-  right: 10px;
-  top: 8px;
-  bottom: 8px;
-  width: 242px;
+  right: 8px;
+  top: 7px;
+  bottom: 7px;
+  width: 216px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 5px;
+  gap: 4px;
   z-index: 5;
   pointer-events: auto;
 }
@@ -1507,8 +1512,8 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 5px 9px;
+  gap: 6px;
+  padding: 4px 8px;
   background: #0d111a;
   border: 1px solid var(--border-dim);
   border-left: 3px solid var(--cyan);
@@ -1535,7 +1540,7 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
 
 .vc-score-box { text-align: right; flex-shrink: 0; }
 .vc-score {
-  font-size: 17px;
+  font-size: 15.5px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -1547,11 +1552,13 @@ html.mobile-viewport-mode .view-mode-btn { display: inline-flex; }
   display: grid;
   grid-template-columns: 1.48fr 1fr;
   gap: 8px;
-  flex: 0 0 26%;
-  min-height: 165px;
+  flex: 0.72 1 26%;
+  min-height: 170px;
 }
 .blotter-panel .panel-hdr { flex-wrap: nowrap; }
-.blotter-tabs { display: flex; align-items: center; gap: 3px; flex-wrap: nowrap; overflow-x: auto; min-width: 0; }
+.blotter-panel #btnCloseAll { flex-shrink: 0; }
+.blotter-tabs { display: flex; align-items: center; gap: 3px; flex-wrap: nowrap; flex: 1 1 auto; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+.blotter-tabs::-webkit-scrollbar { display: none; }
 .btab {
   background: transparent;
   border: 1px solid transparent;
@@ -2345,7 +2352,7 @@ html.desktop-viewport-mode .center-bottom-row {
   grid-template-columns: 1.48fr 1fr;
 }
 html.desktop-viewport-mode .venue-cards-stack {
-  width: 242px;
+  width: 216px;
 }
 html.desktop-viewport-mode .modal-card {
   max-height: 820px;
@@ -2359,9 +2366,12 @@ html.desktop-viewport-mode .modal-card {
   html:not(.desktop-viewport-mode) .inst-btn { padding: 4px 6px; font-size: 10px; gap: 4px; }
   html:not(.desktop-viewport-mode) .strip-telemetry { gap: 8px; }
 }
+@media (max-width: 1366px) {
+  html:not(.desktop-viewport-mode) .venue-cards-stack { width: 196px; }
+}
 @media (max-width: 1280px) {
-  html:not(.desktop-viewport-mode) .terminal-grid { grid-template-columns: 268px minmax(0, 1fr) 244px; }
-  html:not(.desktop-viewport-mode) .venue-cards-stack { width: 206px; }
+  html:not(.desktop-viewport-mode) .terminal-grid { grid-template-columns: 264px minmax(0, 1fr) 238px; }
+  html:not(.desktop-viewport-mode) .venue-cards-stack { width: 192px; }
 }
 @media (max-width: 1024px) {
   html:not(.desktop-viewport-mode) body {
@@ -2454,11 +2464,22 @@ html.desktop-viewport-mode .modal-card {
     flex: none;
   }
   html:not(.desktop-viewport-mode) .chart-panel {
-    min-height: 325px;
+    min-height: 350px;
+  }
+  html:not(.desktop-viewport-mode) .chart-canvas-wrap {
+    min-height: 220px;
   }
   html:not(.desktop-viewport-mode) .chart-panel .panel-hdr {
     flex-wrap: wrap;
     gap: 6px;
+  }
+  html:not(.desktop-viewport-mode) .chart-tf-strip {
+    padding: 5px 8px;
+    gap: 5px;
+  }
+  html:not(.desktop-viewport-mode) .chart-forecast-bar {
+    flex: 1 1 100%;
+    width: 100%;
   }
   html:not(.desktop-viewport-mode) .chart-tf-strip .tf-group {
     width: 100%;
@@ -2509,7 +2530,7 @@ html.desktop-viewport-mode .modal-card {
     display: block;
     order: 0;
     width: 100%;
-    height: 270px;
+    height: 248px;
     flex: none;
   }
   html:not(.desktop-viewport-mode) .venue-cards-stack {
@@ -2563,7 +2584,7 @@ html.desktop-viewport-mode .modal-card {
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .center-bottom-row {
     display: contents !important;
   }
-  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .chart-panel { order: 1; min-height: 295px; }
+  html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .chart-panel { order: 1; min-height: 350px; }
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .sphere-hero-panel { order: 2; }
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .radar-panel { order: 3; }
   html:not(.desktop-viewport-mode)[data-mobile-tab="chart"] .flow-chart-panel { order: 4; }
