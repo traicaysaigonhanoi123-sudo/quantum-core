@@ -33,6 +33,7 @@
       this._uuid = deps.QuantumUUID || QuantumUUID;
       this._schemas = deps.QuantumSchemas || QuantumSchemas;
       this.securityGate = deps.securityGate || (QuantumSecurityGate ? new QuantumSecurityGate() : null);
+      this._now = typeof deps.nowFn === 'function' ? deps.nowFn : () => Date.now();
 
       this.mode = 'DEMO'; // 'DEMO' | 'LIVE'
 
@@ -44,6 +45,9 @@
       this.peakEquity = INITIAL_BALANCE;
       this.realizedPnl = 0;
       this.equityHistory = Array.from({ length: 48 }, () => INITIAL_BALANCE);
+      this.pnlLedger = {};
+      this.demoPnlLedgerBackup = null;
+      this.dailyDateKey = this._toLocalDateKey(this._now());
 
       this.positions = [];
       this.limitOrders = [];
@@ -123,9 +127,89 @@
       }
     }
 
+    _toLocalDateKey(tsMs) {
+      const d = new Date(Number.isFinite(Number(tsMs)) ? Number(tsMs) : this._now());
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    _recordPnlLedgerEntry(dateKey, { netPnl, grossPnl, feeUsd }) {
+      const key = (typeof dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateKey))
+        ? dateKey
+        : this._toLocalDateKey(this._now());
+      const cur = this.pnlLedger[key] || {
+        date: key,
+        realizedPnl: 0,
+        grossPnl: 0,
+        feeUsd: 0,
+        trades: 0,
+        wins: 0,
+        losses: 0
+      };
+      const net = Number(netPnl) || 0;
+      const gross = Number.isFinite(Number(grossPnl)) ? Number(grossPnl) : net;
+      const fee = Number(feeUsd) || 0;
+      cur.realizedPnl += net;
+      cur.grossPnl += gross;
+      cur.feeUsd += fee;
+      cur.trades += 1;
+      if (net >= 0) cur.wins += 1;
+      else cur.losses += 1;
+      this.pnlLedger[key] = cur;
+    }
+
+    _normalizePnlLedger(rawLedger, fallbackHistory = []) {
+      const out = {};
+      if (rawLedger && typeof rawLedger === 'object' && !Array.isArray(rawLedger)) {
+        for (const [k, v] of Object.entries(rawLedger)) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !v || typeof v !== 'object') continue;
+          const realizedPnl = Number(v.realizedPnl);
+          if (!Number.isFinite(realizedPnl)) continue;
+          const grossPnl = Number.isFinite(Number(v.grossPnl)) ? Number(v.grossPnl) : realizedPnl;
+          const feeUsd = Number.isFinite(Number(v.feeUsd)) ? Number(v.feeUsd) : 0;
+          const trades = Math.max(0, Math.round(Number(v.trades) || 0));
+          const wins = Math.max(0, Math.round(Number(v.wins) || 0));
+          const losses = Math.max(0, Math.round(Number(v.losses) || 0));
+          out[k] = { date: k, realizedPnl, grossPnl, feeUsd, trades, wins, losses };
+        }
+      }
+      if (Object.keys(out).length === 0 && Array.isArray(fallbackHistory) && fallbackHistory.length > 0) {
+        for (const h of fallbackHistory) {
+          if (!h || !Number.isFinite(Number(h.pnl))) continue;
+          const dk = (typeof h.dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h.dateKey))
+            ? h.dateKey
+            : this._toLocalDateKey(h.closedAt || this._now());
+          const cur = out[dk] || { date: dk, realizedPnl: 0, grossPnl: 0, feeUsd: 0, trades: 0, wins: 0, losses: 0 };
+          const net = Number(h.pnl) || 0;
+          cur.realizedPnl += net;
+          cur.grossPnl += Number.isFinite(Number(h.grossPnl)) ? Number(h.grossPnl) : net;
+          cur.feeUsd += Number(h.feeUsd) || 0;
+          cur.trades += 1;
+          if (net >= 0) cur.wins += 1;
+          else cur.losses += 1;
+          out[dk] = cur;
+        }
+      }
+      return out;
+    }
+
+    _checkDailyRollover(currentEquity) {
+      const todayKey = this._toLocalDateKey(this._now());
+      if (this.dailyDateKey === todayKey) return;
+      this.dailyDateKey = todayKey;
+      this.dailyStartEquity = Number.isFinite(Number(currentEquity)) ? Number(currentEquity) : (this.balance || this.initialCapital);
+      this.dailyPeakProfitUsd = 0;
+      if (this.dailyProfitLocked) {
+        this.dailyProfitLocked = false;
+        this.dailyProfitLockReason = '';
+      }
+    }
+
     _log(tag, msg) {
-      const id = this._uuid ? this._uuid.v4() : String(Date.now());
-      const time = new Date().toISOString().substr(11, 8);
+      const id = this._uuid ? this._uuid.v4() : String(this._now());
+      const time = new Date(this._now()).toISOString().substr(11, 8);
       this.logs.unshift({ id, time, tag, msg });
       if (this.logs.length > 80) this.logs.pop();
       this._emit('log', { id, time, tag, msg });
@@ -470,6 +554,8 @@
       this.dailyPeakProfitUsd = 0;
       this.dailyProfitLocked = false;
       this.dailyProfitLockReason = '';
+      this.dailyDateKey = this._toLocalDateKey(this._now());
+      this.pnlLedger = {};
       this.positions = [];
       this.limitOrders = [];
       this.history = [];
@@ -492,17 +578,19 @@
       const cloneObj = (o) => JSON.parse(JSON.stringify(o));
       return {
         version: 1,
-        savedAt: Date.now(),
+        savedAt: this._now(),
         initialCapital: this.initialCapital,
         demoCapitalBackup: this.demoCapitalBackup,
         balance: this.balance,
         peakEquity: this.peakEquity,
         realizedPnl: this.realizedPnl,
+        dailyDateKey: this.dailyDateKey,
         dailyStartEquity: this.dailyStartEquity,
         dailyPeakProfitUsd: this.dailyPeakProfitUsd,
         dailyProfitLocked: Boolean(this.dailyProfitLocked),
         dailyProfitLockReason: this.dailyProfitLockReason || '',
         dailyProfitLockEnabled: Boolean(this.dailyProfitLockEnabled),
+        pnlLedger: cloneObj(this.pnlLedger),
         riskMode: this.riskMode || 'BALANCED',
         highRiskLeverage: this.highRiskLeverage || 10,
         botRunning: Boolean(this.botRunning),
@@ -569,6 +657,10 @@
       this.limitOrders = cloneList(snap.limitOrders).filter((o) => o && o.symbol && Number.isFinite(Number(o.entryPrice)) && Number.isFinite(Number(o.sizeUsd)));
       this.history = cloneList(snap.history).slice(0, 60);
       this.logs = cloneList(snap.logs).slice(0, 40);
+      this.dailyDateKey = (typeof snap.dailyDateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(snap.dailyDateKey))
+        ? snap.dailyDateKey
+        : this._toLocalDateKey(this._now());
+      this.pnlLedger = this._normalizePnlLedger(snap.pnlLedger, this.history);
       this._signalConfirmMap = {};
       this._lastBotEntryTick = -999;
       this.botFocusTarget = null;
@@ -642,6 +734,8 @@
       this.dailyPeakProfitUsd = 0;
       this.dailyProfitLocked = false;
       this.dailyProfitLockReason = '';
+      this.dailyDateKey = this._toLocalDateKey(this._now());
+      this.pnlLedger = {};
       this.positions = [];
       this.limitOrders = [];
       this.history = [];
@@ -665,6 +759,7 @@
       const wasSynced = this.liveSyncedBalance !== null;
       if (!wasSynced) {
         this.demoCapitalBackup = this.initialCapital || this.demoCapitalBackup || INITIAL_BALANCE;
+        this.demoPnlLedgerBackup = JSON.parse(JSON.stringify(this.pnlLedger || {}));
       }
 
       this.liveSyncedBalance = eq;
@@ -679,6 +774,8 @@
         this.dailyPeakProfitUsd = 0;
         this.dailyProfitLocked = false;
         this.dailyProfitLockReason = '';
+        this.dailyDateKey = this._toLocalDateKey(this._now());
+        this.pnlLedger = {};
         this.positions = [];
         this.limitOrders = [];
         this.history = [];
@@ -707,9 +804,14 @@
       this.mode = mode;
       if (mode === 'DEMO' && this.liveSyncedBalance !== null) {
         const restoreCap = this.demoCapitalBackup || INITIAL_BALANCE;
+        const restoreLedger = this.demoPnlLedgerBackup
+          ? JSON.parse(JSON.stringify(this.demoPnlLedgerBackup))
+          : {};
         this.liveSyncedBalance = null;
         this.liveSyncedFreeMargin = null;
+        this.demoPnlLedgerBackup = null;
         this.setCapital(restoreCap);
+        this.pnlLedger = restoreLedger;
       }
       this._log('SYS', mode === 'LIVE'
         ? 'Chuyển sang chế độ LIVE API / DEX (phiên đã xác thực 2FA).'
@@ -848,9 +950,14 @@
       this.mode = 'DEMO';
       if (this.liveSyncedBalance !== null) {
         const restoreCap = this.demoCapitalBackup || INITIAL_BALANCE;
+        const restoreLedger = this.demoPnlLedgerBackup
+          ? JSON.parse(JSON.stringify(this.demoPnlLedgerBackup))
+          : {};
         this.liveSyncedBalance = null;
         this.liveSyncedFreeMargin = null;
+        this.demoPnlLedgerBackup = null;
         this.setCapital(restoreCap);
+        this.pnlLedger = restoreLedger;
       }
       this._log('SHIELD', 'Đã thu hồi toàn bộ phiên đăng nhập trên mọi thiết bị & khóa Live Bridge về DEMO.');
       this._emit('toast', { type: 'gold', title: 'ĐÃ THU HỒI TOÀN BỘ PHIÊN', msg: 'Mọi session cũ đã bị vô hiệu hóa.' });
@@ -1150,6 +1257,7 @@
       }
 
       const equity = this.balance + unrealizedPnl;
+      this._checkDailyRollover(equity);
       if (equity > this.peakEquity) this.peakEquity = equity;
       const drawdownPct = this.peakEquity > 0 ? ((this.peakEquity - equity) / this.peakEquity) * 100 : 0;
       const baseStartEquity = Number.isFinite(this.dailyStartEquity) ? this.dailyStartEquity : (this.initialCapital || INITIAL_BALANCE);
@@ -1654,9 +1762,19 @@
         }
       }
 
+      const closedAt = this._now();
+      const dateKey = this._toLocalDateKey(closedAt);
+      this._recordPnlLedgerEntry(dateKey, {
+        netPnl,
+        grossPnl,
+        feeUsd: totalFeeUsd
+      });
+
       const record = {
         id: pos.id,
-        time: new Date().toISOString().substr(11, 8),
+        time: new Date(closedAt).toISOString().substr(11, 8),
+        closedAt,
+        dateKey,
         symbol: pos.symbol,
         exchange: pos.exchange,
         side: pos.side,
@@ -2128,6 +2246,270 @@
           }
         }
       }
+    }
+
+    getPnlCalendarReport({ year, month, includeUnrealized = true } = {}) {
+      const nowMs = this._now();
+      const nowDate = new Date(nowMs);
+      const todayKey = this._toLocalDateKey(nowMs);
+      const currentYear = nowDate.getFullYear();
+      const currentMonth = nowDate.getMonth() + 1;
+      const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+
+      const targetYear = (Number.isInteger(year) && year >= 1970 && year <= 9999) ? year : currentYear;
+      const targetMonth = (Number.isInteger(month) && month >= 1 && month <= 12) ? month : currentMonth;
+
+      const metrics = this.getMetrics();
+      const liveUnrealized = includeUnrealized ? metrics.unrealizedPnl : 0;
+      const baseCapital = Math.max(1, this.initialCapital || INITIAL_BALANCE);
+
+      const classifyStatus = (val, hasActivity) => {
+        if (!hasActivity && Math.abs(val) < 0.005) return 'NONE';
+        if (val > 0.005) return 'PROFIT';
+        if (val < -0.005) return 'LOSS';
+        return 'FLAT';
+      };
+
+      const todayLedger = this.pnlLedger[todayKey] || {
+        date: todayKey,
+        realizedPnl: 0,
+        grossPnl: 0,
+        feeUsd: 0,
+        trades: 0,
+        wins: 0,
+        losses: 0
+      };
+      const hasOpenUnrealized = includeUnrealized && this.positions.length > 0;
+      const todayTotalPnl = todayLedger.realizedPnl + liveUnrealized;
+      const todayHasActivity = todayLedger.trades > 0 || hasOpenUnrealized;
+      const today = {
+        dateKey: todayKey,
+        year: currentYear,
+        month: currentMonth,
+        day: nowDate.getDate(),
+        realizedPnl: todayLedger.realizedPnl,
+        unrealizedPnl: liveUnrealized,
+        totalPnl: todayTotalPnl,
+        pct: (todayTotalPnl / baseCapital) * 100,
+        grossPnl: todayLedger.grossPnl,
+        feeUsd: todayLedger.feeUsd,
+        trades: todayLedger.trades,
+        wins: todayLedger.wins,
+        losses: todayLedger.losses,
+        winRate: todayLedger.trades > 0 ? (todayLedger.wins / todayLedger.trades) * 100 : 0,
+        status: classifyStatus(todayTotalPnl, todayHasActivity)
+      };
+
+      const isCurrentMonth = (targetYear === currentYear && targetMonth === currentMonth);
+      const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+      const firstWeekday = (new Date(targetYear, targetMonth - 1, 1).getDay() + 6) % 7;
+      const monthPrefix = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+
+      const days = [];
+      let mRealized = 0;
+      let mGross = 0;
+      let mFee = 0;
+      let mTrades = 0;
+      let mWins = 0;
+      let mLosses = 0;
+      let mProfitDays = 0;
+      let mLossDays = 0;
+      let mFlatDays = 0;
+      let mActiveDays = 0;
+      let bestDay = null;
+      let worstDay = null;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateKey = `${monthPrefix}-${String(d).padStart(2, '0')}`;
+        const isToday = dateKey === todayKey;
+        const isFuture = dateKey > todayKey;
+        const rec = this.pnlLedger[dateKey];
+        const dRealized = rec ? rec.realizedPnl : 0;
+        const dGross = rec ? rec.grossPnl : 0;
+        const dFee = rec ? rec.feeUsd : 0;
+        const dTrades = rec ? rec.trades : 0;
+        const dWins = rec ? rec.wins : 0;
+        const dLosses = rec ? rec.losses : 0;
+        const dUnrealized = isToday ? liveUnrealized : 0;
+        const dTotal = dRealized + dUnrealized;
+        const dActive = dTrades > 0 || (isToday && hasOpenUnrealized);
+        const status = classifyStatus(dTotal, dActive);
+
+        if (dActive) {
+          mActiveDays++;
+          if (status === 'PROFIT') mProfitDays++;
+          else if (status === 'LOSS') mLossDays++;
+          else if (status === 'FLAT') mFlatDays++;
+          if (!bestDay || dTotal > bestDay.totalPnl) bestDay = { day: d, dateKey, totalPnl: dTotal };
+          if (!worstDay || dTotal < worstDay.totalPnl) worstDay = { day: d, dateKey, totalPnl: dTotal };
+        }
+
+        mRealized += dRealized;
+        mGross += dGross;
+        mFee += dFee;
+        mTrades += dTrades;
+        mWins += dWins;
+        mLosses += dLosses;
+
+        days.push({
+          day: d,
+          dateKey,
+          isToday,
+          isFuture,
+          realizedPnl: dRealized,
+          unrealizedPnl: dUnrealized,
+          totalPnl: dTotal,
+          grossPnl: dGross,
+          feeUsd: dFee,
+          trades: dTrades,
+          wins: dWins,
+          losses: dLosses,
+          status
+        });
+      }
+
+      const mUnrealized = isCurrentMonth ? liveUnrealized : 0;
+      const mTotal = mRealized + mUnrealized;
+      const monthSummary = {
+        year: targetYear,
+        month: targetMonth,
+        monthKey: monthPrefix,
+        isCurrentMonth,
+        daysInMonth,
+        firstWeekday,
+        days,
+        realizedPnl: mRealized,
+        unrealizedPnl: mUnrealized,
+        totalPnl: mTotal,
+        pct: (mTotal / baseCapital) * 100,
+        grossPnl: mGross,
+        feeUsd: mFee,
+        trades: mTrades,
+        wins: mWins,
+        losses: mLosses,
+        winRate: mTrades > 0 ? (mWins / mTrades) * 100 : 0,
+        profitDays: mProfitDays,
+        lossDays: mLossDays,
+        flatDays: mFlatDays,
+        activeDays: mActiveDays,
+        bestDay,
+        worstDay,
+        status: classifyStatus(mTotal, mActiveDays > 0)
+      };
+
+      const isCurrentYear = (targetYear === currentYear);
+      const months = [];
+      let yRealized = 0;
+      let yGross = 0;
+      let yFee = 0;
+      let yTrades = 0;
+      let yWins = 0;
+      let yLosses = 0;
+      let yProfitMonths = 0;
+      let yLossMonths = 0;
+      let yFlatMonths = 0;
+      let yActiveMonths = 0;
+      let bestMonth = null;
+      let worstMonth = null;
+
+      for (let m = 1; m <= 12; m++) {
+        const monthKey = `${targetYear}-${String(m).padStart(2, '0')}`;
+        const prefix = `${monthKey}-`;
+        const isThisMonth = isCurrentYear && m === currentMonth;
+        const isFuture = monthKey > currentMonthKey;
+
+        let mmRealized = 0;
+        let mmGross = 0;
+        let mmFee = 0;
+        let mmTrades = 0;
+        let mmWins = 0;
+        let mmLosses = 0;
+        let mmActiveDays = 0;
+
+        for (const [k, rec] of Object.entries(this.pnlLedger)) {
+          if (!k.startsWith(prefix)) continue;
+          mmRealized += rec.realizedPnl;
+          mmGross += rec.grossPnl;
+          mmFee += rec.feeUsd;
+          mmTrades += rec.trades;
+          mmWins += rec.wins;
+          mmLosses += rec.losses;
+          if (rec.trades > 0) mmActiveDays++;
+        }
+
+        const mmUnrealized = isThisMonth ? liveUnrealized : 0;
+        const mmTotal = mmRealized + mmUnrealized;
+        const mmActive = mmTrades > 0 || (isThisMonth && hasOpenUnrealized);
+        const mmStatus = classifyStatus(mmTotal, mmActive);
+
+        if (mmActive) {
+          yActiveMonths++;
+          if (mmStatus === 'PROFIT') yProfitMonths++;
+          else if (mmStatus === 'LOSS') yLossMonths++;
+          else if (mmStatus === 'FLAT') yFlatMonths++;
+          if (!bestMonth || mmTotal > bestMonth.totalPnl) bestMonth = { month: m, monthKey, label: `T${m}`, totalPnl: mmTotal };
+          if (!worstMonth || mmTotal < worstMonth.totalPnl) worstMonth = { month: m, monthKey, label: `T${m}`, totalPnl: mmTotal };
+        }
+
+        yRealized += mmRealized;
+        yGross += mmGross;
+        yFee += mmFee;
+        yTrades += mmTrades;
+        yWins += mmWins;
+        yLosses += mmLosses;
+
+        months.push({
+          month: m,
+          monthKey,
+          label: `T${m}`,
+          isCurrentMonth: isThisMonth,
+          isFuture,
+          realizedPnl: mmRealized,
+          unrealizedPnl: mmUnrealized,
+          totalPnl: mmTotal,
+          grossPnl: mmGross,
+          feeUsd: mmFee,
+          trades: mmTrades,
+          wins: mmWins,
+          losses: mmLosses,
+          activeDays: mmActiveDays,
+          status: mmStatus
+        });
+      }
+
+      const yUnrealized = isCurrentYear ? liveUnrealized : 0;
+      const yTotal = yRealized + yUnrealized;
+      const yearSummary = {
+        year: targetYear,
+        isCurrentYear,
+        months,
+        realizedPnl: yRealized,
+        unrealizedPnl: yUnrealized,
+        totalPnl: yTotal,
+        pct: (yTotal / baseCapital) * 100,
+        grossPnl: yGross,
+        feeUsd: yFee,
+        trades: yTrades,
+        wins: yWins,
+        losses: yLosses,
+        winRate: yTrades > 0 ? (yWins / yTrades) * 100 : 0,
+        profitMonths: yProfitMonths,
+        lossMonths: yLossMonths,
+        flatMonths: yFlatMonths,
+        activeMonths: yActiveMonths,
+        bestMonth,
+        worstMonth,
+        status: classifyStatus(yTotal, yActiveMonths > 0)
+      };
+
+      return {
+        todayKey,
+        currentYear,
+        currentMonth,
+        today,
+        month: monthSummary,
+        year: yearSummary
+      };
     }
   }
 

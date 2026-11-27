@@ -144,6 +144,8 @@
     return {
       id: h.id,
       time: h.time,
+      closedAt: h.closedAt ?? null,
+      dateKey: h.dateKey ?? null,
       symbol: h.symbol,
       exchange: h.exchange,
       side: h.side,

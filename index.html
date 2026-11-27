@@ -232,6 +232,23 @@
             <span class="ms-val gold" id="kpiFlowIdx">1,290</span>
           </div>
         </div>
+        <div class="kpi-period-pnl" id="kpiPeriodPnl" role="group" aria-label="Lời lỗ theo ngày, tháng, năm">
+          <button type="button" class="kpp-cell" data-pnl-focus="today" title="Xem chi tiết Lời / Lỗ ngày hiện tại">
+            <span class="kpp-lbl">HÔM NAY</span>
+            <strong class="kpp-val" id="kpiPnlToday">$0.00</strong>
+            <span class="kpp-sub" id="kpiPnlTodaySub">HÒA</span>
+          </button>
+          <button type="button" class="kpp-cell" data-pnl-focus="month" title="Xem lịch Lời / Lỗ từng ngày trong tháng">
+            <span class="kpp-lbl">THÁNG NÀY</span>
+            <strong class="kpp-val" id="kpiPnlMonth">$0.00</strong>
+            <span class="kpp-sub" id="kpiPnlMonthSub">0 ngày</span>
+          </button>
+          <button type="button" class="kpp-cell" data-pnl-focus="year" title="Xem thống kê Lời / Lỗ 12 tháng trong năm">
+            <span class="kpp-lbl">NĂM NAY</span>
+            <strong class="kpp-val" id="kpiPnlYear">$0.00</strong>
+            <span class="kpp-sub" id="kpiPnlYearSub">0 tháng</span>
+          </button>
+        </div>
         <div class="capital-bar" id="capitalPresetBar">
           <div class="cap-top-row" id="capDemoRow">
             <span class="cap-lbl">VỐN TK:</span>
@@ -512,6 +529,9 @@
                 <button class="tf-btn" data-tf="5s">5s</button>
                 <button class="tf-btn active" data-tf="1m">1m</button>
                 <button class="tf-btn" data-tf="5m">5m</button>
+                <button class="tf-btn" data-tf="15m">15m</button>
+                <button class="tf-btn" data-tf="30m">30m</button>
+                <button class="tf-btn" data-tf="1h">1h</button>
               </div>
               <button type="button" class="btn btn-xs btn-ghost" id="btnResetZoom" title="Đặt lại khung zoom nến">Reset Zoom</button>
               <button type="button" class="btn btn-xs btn-cyan-outline" id="btnToggleForecast" title="Bật/tắt lớp dự đoán điểm sắp vào lệnh của AI trên biểu đồ">🔮 Dự đoán: ON</button>
@@ -519,6 +539,16 @@
             </div>
           </div>
           <div class="chart-open-pos-bar hidden" id="chartOpenPosBar" aria-label="Biểu đồ các coin đang có vị thế"></div>
+          <div class="chart-forecast-bar" id="chartForecastBar" aria-live="polite">
+            <span class="cf-tf-badge" id="cfTfBadge">PHÂN TÍCH 1M</span>
+            <span class="cf-dir-pill sideways" id="cfDirBadge">↔ ĐANG PHÂN TÍCH...</span>
+            <div class="cf-prob-wrap" title="Xác suất hướng lên / xuống theo khung nến đang chọn">
+              <div class="cf-prob-track"><div class="cf-prob-up" id="cfProbFillUp" style="width:50%"></div></div>
+              <span class="cf-prob-txt" id="cfProbText">Lên 50% / Xuống 50%</span>
+            </div>
+            <span class="cf-target" id="cfTargetText">Mục tiêu: --</span>
+            <span class="cf-reason muted" id="cfReasonText">--</span>
+          </div>
           <div class="chart-canvas-wrap" id="chartCanvasWrap">
             <canvas id="candleChartCanvas"></canvas>
             <div class="chart-tooltip hidden" id="chartTooltip"></div>
@@ -594,6 +624,7 @@
               <button class="btab" data-tab="orders">CHỜ KHỚP <span class="cnt" id="cntOrd">0</span></button>
               <button class="btab btab-arb" data-tab="arb">⚡ FUNDING ARB</button>
               <button class="btab" data-tab="history">LỊCH SỬ <span class="cnt" id="cntHist">0</span></button>
+              <button class="btab btab-pnl" data-tab="pnl">📅 LỜI/LỖ</button>
               <button class="btab" data-tab="logs">NHẬT KÝ</button>
             </div>
             <button class="btn btn-xs btn-danger-outline" id="btnCloseAll">Đóng tất cả</button>
@@ -662,6 +693,31 @@
                 </thead>
                 <tbody id="tblHistory"></tbody>
               </table>
+            </div>
+            <div class="tab-pane" id="panePnl">
+              <div class="pnl-blotter-wrap">
+                <div class="pnl-blotter-bar" id="pnlBlotterToolbar">
+                  <div class="pnl-mini-pills">
+                    <span class="pnl-mpill" id="blPnlToday">Hôm nay: $0.00</span>
+                    <span class="pnl-mpill" id="blPnlMonth">Tháng: $0.00</span>
+                    <span class="pnl-mpill" id="blPnlYear">Năm: $0.00</span>
+                  </div>
+                  <div class="pnl-blotter-controls">
+                    <div class="pnl-subview-btns" id="pnlBlotterSubviewGroup">
+                      <button type="button" class="pnl-sv-btn active" data-pnl-subview="month">Ngày trong tháng</button>
+                      <button type="button" class="pnl-sv-btn" data-pnl-subview="year">Tháng trong năm</button>
+                    </div>
+                    <div class="pnl-nav-grp">
+                      <button type="button" class="btn btn-xs btn-ghost" id="btnBlPnlPrev" title="Kỳ trước">◀</button>
+                      <span class="pnl-period-lbl" id="blPnlPeriodLabel">T11/2026</span>
+                      <button type="button" class="btn btn-xs btn-ghost" id="btnBlPnlNext" title="Kỳ sau">▶</button>
+                      <button type="button" class="btn btn-xs btn-ghost" id="btnBlPnlToday" title="Về hiện tại">Hôm nay</button>
+                    </div>
+                    <button type="button" class="btn btn-xs btn-cyan-outline" id="btnOpenPnlModalFromBlotter">⛶ Chi tiết</button>
+                  </div>
+                </div>
+                <div class="pnl-blotter-grid" id="pnlBlotterGrid"></div>
+              </div>
             </div>
             <div class="tab-pane" id="paneLogs">
               <div class="log-feed" id="systemLogFeed"></div>
@@ -1227,6 +1283,63 @@
           </thead>
           <tbody id="coinPickerList"></tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== PNL CALENDAR MODAL (TODAY / MONTH / YEAR) ==================== -->
+  <div class="modal-backdrop hidden" id="pnlCalendarModal" role="dialog" aria-modal="true" aria-labelledby="pnlModalTitle">
+    <div class="modal-card pnl-modal-card">
+      <div class="modal-hdr">
+        <div>
+          <h2 id="pnlModalTitle">📅 THỐNG KÊ LỜI / LỖ — NGÀY • THÁNG • NĂM</h2>
+          <p class="modal-sub">Nhận biết nhanh trạng thái LỜI / LỖ / HÒA của ngày hiện tại, từng ngày trong tháng và từng tháng trong năm</p>
+        </div>
+        <button type="button" class="modal-close" id="btnClosePnlModal" aria-label="Đóng">✕</button>
+      </div>
+
+      <div class="modal-scroll-area pnl-modal-body">
+        <!-- 3 Hero Summary Cards -->
+        <div class="pnl-hero-grid" id="pnlModalHeroSection">
+          <div class="pnl-hero-card" id="pnlHeroToday"></div>
+          <div class="pnl-hero-card" id="pnlHeroMonth"></div>
+          <div class="pnl-hero-card" id="pnlHeroYear"></div>
+        </div>
+
+        <!-- Monthly Daily Calendar -->
+        <section class="pnl-section" id="pnlModalMonthSection">
+          <div class="pnl-sec-hdr">
+            <div class="pnl-sec-title-grp">
+              <span class="pnl-sec-title" id="pnlModalMonthTitle">NGÀY TRONG THÁNG 11/2026</span>
+              <span class="pnl-sec-meta" id="pnlModalMonthStats">0 ngày lời • 0 ngày lỗ</span>
+            </div>
+            <div class="pnl-nav-grp">
+              <button type="button" class="btn btn-xs btn-ghost" id="btnPnlMonthPrev" title="Tháng trước">◀</button>
+              <button type="button" class="btn btn-xs btn-cyan-outline" id="btnPnlJumpToday">Hôm nay</button>
+              <button type="button" class="btn btn-xs btn-ghost" id="btnPnlMonthNext" title="Tháng sau">▶</button>
+            </div>
+          </div>
+          <div class="pnl-cal-weekdays">
+            <span>T2</span><span>T3</span><span>T4</span><span>T5</span><span>T6</span><span>T7</span><span>CN</span>
+          </div>
+          <div class="pnl-cal-grid" id="pnlModalDaysGrid"></div>
+          <div class="pnl-day-detail" id="pnlSelectedDayDetail">Chọn một ngày trên lịch để xem chi tiết Lời / Lỗ.</div>
+        </section>
+
+        <!-- Yearly 12-Month Breakdown -->
+        <section class="pnl-section" id="pnlModalYearSection">
+          <div class="pnl-sec-hdr">
+            <div class="pnl-sec-title-grp">
+              <span class="pnl-sec-title" id="pnlModalYearTitle">THÁNG TRONG NĂM 2026</span>
+              <span class="pnl-sec-meta" id="pnlModalYearStats">0 tháng lời • 0 tháng lỗ</span>
+            </div>
+            <div class="pnl-nav-grp">
+              <button type="button" class="btn btn-xs btn-ghost" id="btnPnlYearPrev" title="Năm trước">◀</button>
+              <button type="button" class="btn btn-xs btn-ghost" id="btnPnlYearNext" title="Năm sau">▶</button>
+            </div>
+          </div>
+          <div class="pnl-months-grid" id="pnlModalMonthsGrid"></div>
+        </section>
       </div>
     </div>
   </div>

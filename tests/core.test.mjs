@@ -1663,3 +1663,216 @@ test('DEMO and LIVE charge exact pure exchange fees, support Binance BNB -10%, a
   market.clearLiveVenueFeeRates();
   assert.equal(market.getVenueFeeBps('BINANCE', false), 5.0);
 });
+
+test('PnL Calendar ledger tracks today, days in month, months in year, live uPnL, and persistence round-trip', () => {
+  const localTs = (y, m, d, hh = 12) => new Date(y, m - 1, d, hh, 0, 0, 0).getTime();
+  let fakeNow = localTs(2025, 12, 18);
+
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+  const trading = new QuantumTradingEngine(market, {
+    QuantumUUID,
+    QuantumSchemas,
+    nowFn: () => fakeNow
+  });
+  trading.setCapital(1000);
+  market.wsEnabled = true;
+
+  const tradeWithResult = (sym, entryPx, exitPx, sizeUsd = 1000) => {
+    market.applyLiveVenueQuote(sym, 'BINANCE', entryPx, 0.01, 0);
+    const pos = trading.placeMarketOrder({
+      symbol: sym,
+      exchange: 'BINANCE',
+      side: 'LONG',
+      sizeUsd,
+      leverage: 5,
+      slPct: 5.0,
+      tpPct: 10.0,
+      source: 'MANUAL'
+    });
+    assert.ok(pos);
+    trading.closePosition(pos.id, exitPx >= entryPx ? 'TAKE PROFIT HIT' : 'STOP LOSS HIT', exitPx);
+    trading.riskShield.cooldownTicks = 0;
+    trading.riskShield.cooldownUntil = 0;
+    return trading.history[0].pnl;
+  };
+
+  // 1. Historical year (2025-12-18): profit trade
+  const pnl2025 = tradeWithResult('BTC-PERP', 50000, 50500, 1000);
+  assert.ok(pnl2025 > 0);
+
+  // 2. Previous month (2026-10-05 & 2026-10-18)
+  fakeNow = localTs(2026, 10, 5);
+  const pnlOct5 = tradeWithResult('ETH-PERP', 2000, 2040, 1000);
+  fakeNow = localTs(2026, 10, 18);
+  const pnlOct18 = tradeWithResult('ETH-PERP', 2000, 1980, 1000);
+
+  // 3. Current month (2026-11): Nov 3 loss, Nov 12 profit, Nov 27 today profit
+  fakeNow = localTs(2026, 11, 3);
+  const pnlNov3 = tradeWithResult('SOL-PERP', 100, 98, 1000);
+  assert.ok(pnlNov3 < 0);
+
+  fakeNow = localTs(2026, 11, 12);
+  const pnlNov12 = tradeWithResult('SOL-PERP', 100, 103, 1000);
+  assert.ok(pnlNov12 > 0);
+
+  fakeNow = localTs(2026, 11, 27);
+  const pnlNov27Closed = tradeWithResult('SOL-PERP', 100, 101.5, 1000);
+  assert.ok(pnlNov27Closed > 0);
+
+  // Verify public history DTO exposes closedAt and dateKey
+  const pubHist = trading.getPublicHistory();
+  assert.equal(pubHist[0].dateKey, '2026-11-27');
+  assert.equal(pubHist[0].closedAt, fakeNow);
+
+  // 4. Open an active position today (2026-11-27) with positive live unrealizedPnL
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', 50000, 0.01, 0);
+  const openPos = trading.placeMarketOrder({
+    symbol: 'BTC-PERP',
+    exchange: 'BINANCE',
+    side: 'LONG',
+    sizeUsd: 1000,
+    leverage: 5,
+    slPct: 5.0,
+    tpPct: 10.0,
+    source: 'MANUAL'
+  });
+  assert.ok(openPos);
+  market.applyLiveVenueQuote('BTC-PERP', 'BINANCE', 50400, 0.01, 0.8);
+  const liveUpnl = trading.getMetrics().unrealizedPnl;
+  assert.ok(liveUpnl > 5);
+
+  const report = trading.getPnlCalendarReport();
+  assert.equal(report.todayKey, '2026-11-27');
+  assert.equal(report.today.status, 'PROFIT');
+  assert.ok(Math.abs(report.today.realizedPnl - pnlNov27Closed) < 1e-6);
+  assert.ok(Math.abs(report.today.unrealizedPnl - liveUpnl) < 1e-6);
+  assert.ok(Math.abs(report.today.totalPnl - (pnlNov27Closed + liveUpnl)) < 1e-6);
+
+  // Days in November 2026 (30 days)
+  assert.equal(report.month.days.length, 30);
+  assert.equal(report.month.days[2].day, 3);
+  assert.equal(report.month.days[2].status, 'LOSS');
+  assert.equal(report.month.days[11].day, 12);
+  assert.equal(report.month.days[11].status, 'PROFIT');
+  assert.equal(report.month.days[26].day, 27);
+  assert.equal(report.month.days[26].isToday, true);
+  assert.ok(Math.abs(report.month.days[26].totalPnl - (pnlNov27Closed + liveUpnl)) < 1e-6);
+  assert.equal(report.month.profitDays, 2);
+  assert.equal(report.month.lossDays, 1);
+  assert.equal(report.month.activeDays, 3);
+
+  // Months in 2026 (12 months)
+  assert.equal(report.year.months.length, 12);
+  const octItem = report.year.months[9];
+  const novItem = report.year.months[10];
+  assert.equal(octItem.month, 10);
+  assert.equal(octItem.unrealizedPnl, 0);
+  assert.ok(Math.abs(octItem.realizedPnl - (pnlOct5 + pnlOct18)) < 1e-6);
+  assert.equal(novItem.month, 11);
+  assert.equal(novItem.isCurrentMonth, true);
+  assert.ok(Math.abs(novItem.unrealizedPnl - liveUpnl) < 1e-6);
+  const expectedYearRealized = pnlOct5 + pnlOct18 + pnlNov3 + pnlNov12 + pnlNov27Closed;
+  assert.ok(Math.abs(report.year.realizedPnl - expectedYearRealized) < 1e-6);
+  assert.ok(Math.abs(report.year.totalPnl - (expectedYearRealized + liveUpnl)) < 1e-6);
+
+  // Historical month & historical year queries must NOT include current live uPnL
+  const histOctReport = trading.getPnlCalendarReport({ year: 2026, month: 10 });
+  assert.equal(histOctReport.month.unrealizedPnl, 0);
+  assert.ok(Math.abs(histOctReport.month.totalPnl - (pnlOct5 + pnlOct18)) < 1e-6);
+
+  const hist2025Report = trading.getPnlCalendarReport({ year: 2025, month: 12 });
+  assert.equal(hist2025Report.year.unrealizedPnl, 0);
+  assert.equal(hist2025Report.month.unrealizedPnl, 0);
+  assert.ok(Math.abs(hist2025Report.year.totalPnl - pnl2025) < 1e-6);
+
+  // 5. exportState -> importState round-trip preserves full multi-year pnlLedger
+  const snap = trading.exportState();
+  const restored = new QuantumTradingEngine(market, {
+    QuantumUUID,
+    QuantumSchemas,
+    nowFn: () => fakeNow
+  });
+  assert.equal(restored.importState(snap), true);
+  const restored2025 = restored.getPnlCalendarReport({ year: 2025, month: 12 });
+  assert.ok(Math.abs(restored2025.year.totalPnl - pnl2025) < 1e-6);
+
+  // Legacy snapshot without pnlLedger backfills cleanly from history
+  const legacySnap = { ...snap };
+  delete legacySnap.pnlLedger;
+  const legacyRestored = new QuantumTradingEngine(market, {
+    QuantumUUID,
+    QuantumSchemas,
+    nowFn: () => fakeNow
+  });
+  assert.equal(legacyRestored.importState(legacySnap), true);
+  assert.ok(Math.abs(legacyRestored.getPnlCalendarReport().today.realizedPnl - pnlNov27Closed) < 1e-6);
+});
+
+test('Timeframes 15m/30m/1h map exchange intervals cleanly and compute UP/DOWN directional forecasts', () => {
+  const market = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+
+  const spec15 = market.getTimeframeSpec('15m');
+  const spec30 = market.getTimeframeSpec('30m');
+  const spec1h = market.getTimeframeSpec('1h');
+  assert.equal(spec15.tfMs, 900000);
+  assert.equal(spec15.bybit, '15');
+  assert.equal(spec15.okx, '15m');
+  assert.equal(spec15.binance, '15m');
+  assert.equal(spec30.tfMs, 1800000);
+  assert.equal(spec30.bybit, '30');
+  assert.equal(spec1h.tfMs, 3600000);
+  assert.equal(spec1h.bybit, '60');
+  assert.equal(spec1h.okx, '1H');
+  assert.equal(spec1h.binance, '1h');
+
+  const st = market.getSymbolState('BTC-PERP');
+  const origSigLen = st.signalCandles.length;
+  const now = Date.now();
+
+  // Feed bullish 15m series
+  market.setTimeframe('15m');
+  assert.equal(market.timeframe, '15m');
+  assert.equal(st.signalCandles.length, origSigLen);
+  const bull15m = [];
+  let pxUp = 58000;
+  for (let i = 40; i > 0; i--) {
+    const o = pxUp;
+    const c = o + 45;
+    bull15m.push({ t: now - i * 900000, o, h: c + 25, l: o - 15, c, v: 900 + i * 15 });
+    pxUp = c;
+  }
+  st.tfCandles['15m'] = bull15m;
+  st.orderbook.bidRatio = 0.62;
+
+  const f15 = market.getTimeframeForecast('BTC-PERP', '15m');
+  assert.equal(f15.timeframe, '15m');
+  assert.equal(f15.direction, 'UP');
+  assert.equal(f15.side, 'LONG');
+  assert.ok(f15.probabilityUp > f15.probabilityDown);
+  assert.ok(f15.targetPrice > f15.lastPrice);
+  assert.ok(f15.supportPrice < f15.resistancePrice);
+
+  // Feed bearish 1h series
+  market.setTimeframe('30m');
+  assert.equal(market.timeframe, '30m');
+  market.setTimeframe('1h');
+  assert.equal(market.timeframe, '1h');
+  const bear1h = [];
+  let pxDn = 61000;
+  for (let i = 40; i > 0; i--) {
+    const o = pxDn;
+    const c = o - 80;
+    bear1h.push({ t: now - i * 3600000, o, h: o + 20, l: c - 30, c, v: 1500 + i * 20 });
+    pxDn = c;
+  }
+  st.tfCandles['1h'] = bear1h;
+  st.orderbook.bidRatio = 0.38;
+
+  const f1h = market.getTimeframeForecast('BTC-PERP', '1h');
+  assert.equal(f1h.timeframe, '1h');
+  assert.equal(f1h.direction, 'DOWN');
+  assert.equal(f1h.side, 'SHORT');
+  assert.ok(f1h.probabilityDown > f1h.probabilityUp);
+  assert.ok(f1h.targetPrice < f1h.lastPrice);
+  assert.equal(st.signalCandles.length, origSigLen);
+});

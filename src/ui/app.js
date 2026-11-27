@@ -20,6 +20,12 @@
 
   let selectedSide = 'LONG';
   let activeBlotterTab = 'positions';
+  let pnlViewYear = new Date().getFullYear();
+  let pnlViewMonth = new Date().getMonth() + 1;
+  let pnlSelectedDateKey = null;
+  let pnlBlotterView = 'month';
+  let lastPnlBlotterSig = '';
+  let lastPnlModalSig = '';
   let activeOtpChallengeId = null;
   let verified2faSession = null;
   let liveSyncTimer = null;
@@ -432,6 +438,15 @@
 
     $('kpiWinRate').textContent = `${m.winRate.toFixed(1)}% (${m.wins}/${m.wins + m.losses})`;
 
+    const pnlReport = typeof trading.getPnlCalendarReport === 'function'
+      ? trading.getPnlCalendarReport({ year: pnlViewYear, month: pnlViewMonth })
+      : null;
+    if (pnlReport) {
+      updateKpiPeriodStrip(pnlReport);
+      renderPnlBlotter(pnlReport, false);
+      renderPnlModal(pnlReport, false);
+    }
+
     if (typeof trading.computeCapitalPlan === 'function') {
       const capProf = trading.computeCapitalPlan(m.equity);
       const badgeEl = $('capitalTierBadge');
@@ -558,7 +573,7 @@
     if (mobEq) mobEq.textContent = `$${m.equity.toFixed(2)}`;
     const mobPnl = $('mobMiniPnl');
     if (mobPnl) {
-      const dp = Number.isFinite(m.dailyPnlUsd) ? m.dailyPnlUsd : 0;
+      const dp = pnlReport ? pnlReport.today.totalPnl : (Number.isFinite(m.dailyPnlUsd) ? m.dailyPnlUsd : 0);
       mobPnl.textContent = dp > 0.005
         ? `LỜI +$${dp.toFixed(2)}`
         : (dp < -0.005 ? `LỖ -$${Math.abs(dp).toFixed(2)}` : '$0.00');
@@ -1084,6 +1099,62 @@
     renderOrderbook(st);
     renderTape(st);
     updateSLTPPreview();
+    renderChartForecastBar(st);
+  }
+
+  function renderChartForecastBar(st) {
+    const bar = $('chartForecastBar');
+    if (!bar) return;
+    const enabled = Boolean(candleRenderer.showForecast);
+    bar.classList.toggle('hidden', !enabled);
+    if (!enabled || !st || typeof market.getTimeframeForecast !== 'function') return;
+
+    const f = market.getTimeframeForecast(st.symbol, market.timeframe);
+    const tfBadge = $('cfTfBadge');
+    const dirBadge = $('cfDirBadge');
+    const probFill = $('cfProbFillUp');
+    const probTxt = $('cfProbText');
+    const targetTxt = $('cfTargetText');
+    const reasonTxt = $('cfReasonText');
+
+    if (tfBadge) tfBadge.textContent = `PHÂN TÍCH ${f.tfLabel}`;
+    if (dirBadge) {
+      let icon = '↔';
+      let cls = 'sideways';
+      if (f.direction === 'UP') { icon = '▲'; cls = 'up'; }
+      else if (f.direction === 'DOWN') { icon = '▼'; cls = 'down'; }
+      dirBadge.textContent = `${icon} ${f.directionLabel}`;
+      dirBadge.className = `cf-dir-pill ${cls}`;
+    }
+    if (probFill) probFill.style.width = `${f.probabilityUp}%`;
+    if (probTxt) probTxt.textContent = `Lên ${f.probabilityUp}% • Xuống ${f.probabilityDown}%`;
+    if (targetTxt) {
+      const mvSign = f.targetMovePct >= 0 ? '+' : '';
+      targetTxt.textContent = `Mục tiêu: $${market.formatPrice(f.targetPrice, st.symbol)} (${mvSign}${f.targetMovePct.toFixed(2)}%) • HT $${market.formatPrice(f.supportPrice, st.symbol)} / KC $${market.formatPrice(f.resistancePrice, st.symbol)}`;
+    }
+    if (reasonTxt) reasonTxt.textContent = f.summary;
+  }
+
+  function selectTimeframeUi(tf, notify = true) {
+    document.querySelectorAll('#tfGroup .tf-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.tf === tf);
+    });
+    market.setTimeframe(tf);
+    candleRenderer._forecastCache.ts = 0;
+    const st = market.getSymbolState();
+    updateMarketHUD(st);
+    if (typeof candleRenderer.draw === 'function') candleRenderer.draw();
+    savePersistedState(true);
+    if (notify && typeof market.getTimeframeForecast === 'function' && st) {
+      const f = market.getTimeframeForecast(st.symbol, market.timeframe);
+      const tType = f.direction === 'UP' ? 'pos' : (f.direction === 'DOWN' ? 'neg' : 'gold');
+      const mvSign = f.targetMovePct >= 0 ? '+' : '';
+      showToast({
+        type: tType,
+        title: `🔮 KHUNG ${f.tfLabel}: ${f.directionLabel}`,
+        msg: `${st.symbol} • Lên ${f.probabilityUp}% / Xuống ${f.probabilityDown}% • Mục tiêu $${market.formatPrice(f.targetPrice, st.symbol)} (${mvSign}${f.targetMovePct.toFixed(2)}%)`
+      });
+    }
   }
 
   function selectSymbol(sym) {
@@ -1117,14 +1188,392 @@
     updateSLTPPreview();
   }
 
+  function formatPnlStatus(status) {
+    if (status === 'PROFIT') return 'LỜI';
+    if (status === 'LOSS') return 'LỖ';
+    if (status === 'FLAT') return 'HÒA';
+    return '--';
+  }
+
+  function pnlStatusClass(status) {
+    if (status === 'PROFIT') return 'is-profit';
+    if (status === 'LOSS') return 'is-loss';
+    if (status === 'FLAT') return 'is-flat';
+    return 'is-none';
+  }
+
+  function pnlTextClass(val, status) {
+    if (status === 'PROFIT' || val > 0.005) return 'pos';
+    if (status === 'LOSS' || val < -0.005) return 'neg';
+    return 'muted';
+  }
+
+  function formatCompactSignedUsd(val) {
+    const n = Number(val) || 0;
+    const abs = Math.abs(n);
+    const sign = n > 0.005 ? '+' : (n < -0.005 ? '-' : '');
+    if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+    if (abs >= 1000) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+    if (abs >= 100) return `${sign}$${abs.toFixed(0)}`;
+    if (abs >= 0.01) return `${sign}$${abs.toFixed(2)}`;
+    return '$0';
+  }
+
+  function formatDateKeyVN(dateKey) {
+    if (!dateKey || typeof dateKey !== 'string') return '--';
+    const parts = dateKey.split('-');
+    if (parts.length !== 3) return dateKey;
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+
+  function stepPnlMonth(delta) {
+    let m = pnlViewMonth + delta;
+    let y = pnlViewYear;
+    while (m < 1) { m += 12; y -= 1; }
+    while (m > 12) { m -= 12; y += 1; }
+    pnlViewMonth = m;
+    pnlViewYear = y;
+    pnlSelectedDateKey = `${y}-${String(m).padStart(2, '0')}-01`;
+  }
+
+  function jumpPnlToToday() {
+    const now = new Date();
+    pnlViewYear = now.getFullYear();
+    pnlViewMonth = now.getMonth() + 1;
+    pnlSelectedDateKey = `${pnlViewYear}-${String(pnlViewMonth).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+
+  function updateKpiPeriodStrip(report) {
+    if (!report) return;
+    const t = report.today;
+    const m = report.month;
+    const y = report.year;
+
+    const applyCell = (valId, subId, focusName, val, status, subText) => {
+      const valEl = $(valId);
+      const subEl = $(subId);
+      const cellEl = document.querySelector(`#kpiPeriodPnl [data-pnl-focus="${focusName}"]`);
+      if (valEl) {
+        valEl.textContent = Math.abs(val) < 0.005 ? '$0.00' : fmtSignedUsd(val, 2);
+        valEl.className = `kpp-val ${pnlTextClass(val, status)}`;
+      }
+      if (subEl) {
+        subEl.textContent = subText;
+        subEl.className = `kpp-sub ${pnlTextClass(val, status)}`;
+      }
+      if (cellEl) {
+        cellEl.classList.remove('is-profit', 'is-loss', 'is-flat', 'is-none');
+        cellEl.classList.add(pnlStatusClass(status));
+      }
+    };
+
+    const tLabel = t.status === 'NONE' ? 'CHƯA GD' : `${formatPnlStatus(t.status)}${t.trades > 0 ? ` • ${t.trades}L` : ''}`;
+    applyCell('kpiPnlToday', 'kpiPnlTodaySub', 'today', t.totalPnl, t.status, tLabel);
+
+    const mLabel = m.activeDays > 0
+      ? `${formatPnlStatus(m.status)} • ${m.profitDays}W/${m.lossDays}L`
+      : '0 ngày GD';
+    applyCell('kpiPnlMonth', 'kpiPnlMonthSub', 'month', m.totalPnl, m.status, mLabel);
+
+    const yLabel = y.activeMonths > 0
+      ? `${formatPnlStatus(y.status)} • ${y.profitMonths}/${y.activeMonths}T`
+      : '0 tháng GD';
+    applyCell('kpiPnlYear', 'kpiPnlYearSub', 'year', y.totalPnl, y.status, yLabel);
+  }
+
+  function renderPnlBlotter(report, force = false) {
+    if (activeBlotterTab !== 'pnl' || !report) return;
+    const gridEl = $('pnlBlotterGrid');
+    if (!gridEl) return;
+
+    const sig = [
+      pnlBlotterView,
+      pnlViewYear,
+      pnlViewMonth,
+      report.todayKey,
+      report.today.totalPnl.toFixed(2),
+      report.month.totalPnl.toFixed(2),
+      report.month.trades,
+      report.year.totalPnl.toFixed(2),
+      report.year.trades
+    ].join('|');
+    if (!force && sig === lastPnlBlotterSig) return;
+    lastPnlBlotterSig = sig;
+
+    const setMiniPill = (id, prefix, obj) => {
+      const el = $(id);
+      if (!el) return;
+      const valTxt = Math.abs(obj.totalPnl) < 0.005 ? '$0.00' : fmtSignedUsd(obj.totalPnl, 2);
+      const stTxt = obj.status === 'NONE' ? 'CHƯA GD' : formatPnlStatus(obj.status);
+      el.textContent = `${prefix}: ${valTxt} (${stTxt})`;
+      el.className = `pnl-mpill ${pnlStatusClass(obj.status)}`;
+    };
+
+    setMiniPill('blPnlToday', 'Hôm nay', report.today);
+    setMiniPill('blPnlMonth', `T${report.month.month}`, report.month);
+    setMiniPill('blPnlYear', `Năm ${report.year.year}`, report.year);
+
+    const lblEl = $('blPnlPeriodLabel');
+    if (lblEl) {
+      lblEl.textContent = pnlBlotterView === 'month'
+        ? `T${String(report.month.month).padStart(2, '0')}/${report.month.year}`
+        : `Năm ${report.year.year}`;
+    }
+
+    document.querySelectorAll('#pnlBlotterSubviewGroup [data-pnl-subview]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.pnlSubview === pnlBlotterView);
+    });
+
+    if (pnlBlotterView === 'month') {
+      const empties = Array.from({ length: report.month.firstWeekday }, () => '<div class="pnl-cell empty"></div>').join('');
+      const dayCells = report.month.days.map((d) => {
+        const cls = [
+          'pnl-cell',
+          'compact',
+          pnlStatusClass(d.status),
+          d.isToday ? 'is-today' : '',
+          d.isFuture ? 'is-future' : ''
+        ].filter(Boolean).join(' ');
+        const valTxt = (d.trades > 0 || (d.isToday && Math.abs(d.totalPnl) >= 0.005))
+          ? formatCompactSignedUsd(d.totalPnl)
+          : '';
+        return `
+          <button type="button" class="${cls}" data-pnl-day="${d.dateKey}" title="${formatDateKeyVN(d.dateKey)}: ${fmtSignedUsd(d.totalPnl, 2)} (${d.trades} lệnh)">
+            <span class="pcell-day">${d.day}</span>
+            <span class="pcell-val ${pnlTextClass(d.totalPnl, d.status)}">${valTxt}</span>
+          </button>`;
+      }).join('');
+      gridEl.innerHTML = `
+        <div class="pnl-cal-weekdays compact">
+          <span>T2</span><span>T3</span><span>T4</span><span>T5</span><span>T6</span><span>T7</span><span>CN</span>
+        </div>
+        <div class="pnl-cal-grid compact">${empties}${dayCells}</div>`;
+    } else {
+      const monthCells = report.year.months.map((mm) => {
+        const cls = [
+          'pnl-month-tile',
+          'compact',
+          pnlStatusClass(mm.status),
+          mm.isCurrentMonth ? 'is-current' : '',
+          mm.isFuture ? 'is-future' : '',
+          mm.month === report.month.month ? 'is-selected' : ''
+        ].filter(Boolean).join(' ');
+        const valTxt = (mm.trades > 0 || (mm.isCurrentMonth && Math.abs(mm.totalPnl) >= 0.005))
+          ? formatCompactSignedUsd(mm.totalPnl)
+          : '--';
+        return `
+          <button type="button" class="${cls}" data-pnl-month="${mm.month}" title="Tháng ${mm.month}/${report.year.year}: ${fmtSignedUsd(mm.totalPnl, 2)} (${mm.trades} lệnh)">
+            <div class="pmt-top">
+              <strong>${mm.label}</strong>
+              <span class="pmt-badge">${mm.status === 'NONE' ? '--' : formatPnlStatus(mm.status)}</span>
+            </div>
+            <div class="pmt-val ${pnlTextClass(mm.totalPnl, mm.status)}">${valTxt}</div>
+            <div class="pmt-meta">${mm.activeDays} ngày • ${mm.trades} lệnh</div>
+          </button>`;
+      }).join('');
+      gridEl.innerHTML = `<div class="pnl-months-grid compact">${monthCells}</div>`;
+    }
+  }
+
+  function renderPnlModal(report, force = false) {
+    const modalEl = $('pnlCalendarModal');
+    if (!modalEl || modalEl.classList.contains('hidden') || !report) return;
+
+    const selectedKey = pnlSelectedDateKey || report.todayKey;
+    const sig = [
+      pnlViewYear,
+      pnlViewMonth,
+      selectedKey,
+      report.todayKey,
+      report.today.totalPnl.toFixed(2),
+      report.month.totalPnl.toFixed(2),
+      report.month.trades,
+      report.year.totalPnl.toFixed(2),
+      report.year.trades
+    ].join('|');
+    if (!force && sig === lastPnlModalSig) return;
+    lastPnlModalSig = sig;
+
+    const buildHeroCard = (title, subTitle, obj, extraLine) => {
+      const cls = pnlStatusClass(obj.status);
+      const valCls = pnlTextClass(obj.totalPnl, obj.status);
+      const valTxt = Math.abs(obj.totalPnl) < 0.005 ? '$0.00' : fmtSignedUsd(obj.totalPnl, 2);
+      const pctSign = obj.pct > 0 ? '+' : '';
+      const stTxt = obj.status === 'NONE' ? 'CHƯA GIAO DỊCH' : formatPnlStatus(obj.status);
+      return `
+        <div class="pnl-hero-inner ${cls}">
+          <div class="ph-top">
+            <div>
+              <div class="ph-title">${title}</div>
+              <div class="ph-sub">${subTitle}</div>
+            </div>
+            <span class="pnl-status-pill ${cls}">${stTxt}</span>
+          </div>
+          <div class="ph-main-val ${valCls}">${valTxt} <span class="ph-pct">(${pctSign}${obj.pct.toFixed(2)}%)</span></div>
+          <div class="ph-breakdown">
+            <span>Đã chốt: <strong>${fmtSignedUsd(obj.realizedPnl, 2)}</strong></span>
+            <span>Đang chạy: <strong>${fmtSignedUsd(obj.unrealizedPnl, 2)}</strong></span>
+          </div>
+          <div class="ph-footer">${extraLine}</div>
+        </div>`;
+    };
+
+    const t = report.today;
+    const m = report.month;
+    const y = report.year;
+
+    const heroToday = $('pnlHeroToday');
+    if (heroToday) {
+      heroToday.innerHTML = buildHeroCard(
+        'NGÀY HIỆN TẠI',
+        formatDateKeyVN(t.dateKey),
+        t,
+        `${t.trades} lệnh (${t.wins}W / ${t.losses}L) • Phí: -$${t.feeUsd.toFixed(2)}`
+      );
+    }
+
+    const heroMonth = $('pnlHeroMonth');
+    if (heroMonth) {
+      const bestStr = m.bestDay ? `Đỉnh: N${m.bestDay.day} (${formatCompactSignedUsd(m.bestDay.totalPnl)})` : 'Chưa có dữ liệu';
+      heroMonth.innerHTML = buildHeroCard(
+        `THÁNG ${String(m.month).padStart(2, '0')}/${m.year}`,
+        `${m.activeDays}/${m.daysInMonth} ngày có GD`,
+        m,
+        `${m.profitDays} ngày LỜI • ${m.lossDays} ngày LỖ • ${bestStr}`
+      );
+    }
+
+    const heroYear = $('pnlHeroYear');
+    if (heroYear) {
+      const bestMStr = y.bestMonth ? `Tốt nhất: ${y.bestMonth.label} (${formatCompactSignedUsd(y.bestMonth.totalPnl)})` : 'Chưa có dữ liệu';
+      heroYear.innerHTML = buildHeroCard(
+        `NĂM ${y.year}`,
+        `${y.activeMonths}/12 tháng có GD`,
+        y,
+        `${y.profitMonths} tháng LỜI • ${y.lossMonths} tháng LỖ • ${bestMStr}`
+      );
+    }
+
+    const mTitleEl = $('pnlModalMonthTitle');
+    const mStatsEl = $('pnlModalMonthStats');
+    if (mTitleEl) mTitleEl.textContent = `NGÀY TRONG THÁNG ${String(m.month).padStart(2, '0')}/${m.year}`;
+    if (mStatsEl) {
+      mStatsEl.textContent = `${m.profitDays} ngày lời • ${m.lossDays} ngày lỗ • ${m.trades} lệnh (${m.winRate.toFixed(0)}% WR)`;
+    }
+
+    const daysGridEl = $('pnlModalDaysGrid');
+    if (daysGridEl) {
+      const empties = Array.from({ length: m.firstWeekday }, () => '<div class="pnl-cell empty"></div>').join('');
+      const dayCells = m.days.map((d) => {
+        const cls = [
+          'pnl-cell',
+          pnlStatusClass(d.status),
+          d.isToday ? 'is-today' : '',
+          d.isFuture ? 'is-future' : '',
+          d.dateKey === selectedKey ? 'is-selected' : ''
+        ].filter(Boolean).join(' ');
+        const hasVal = d.trades > 0 || (d.isToday && Math.abs(d.totalPnl) >= 0.005);
+        const valTxt = hasVal ? formatCompactSignedUsd(d.totalPnl) : '';
+        const metaTxt = d.trades > 0
+          ? `${d.trades}L (${d.wins}W/${d.losses}L)`
+          : (d.isToday && Math.abs(d.unrealizedPnl) >= 0.005 ? 'Đang mở' : '');
+        return `
+          <button type="button" class="${cls}" data-pnl-day="${d.dateKey}">
+            <div class="pcell-head">
+              <span class="pcell-day">${d.day}</span>
+              ${d.isToday ? '<span class="pcell-today-tag">NAY</span>' : ''}
+            </div>
+            <div class="pcell-val ${pnlTextClass(d.totalPnl, d.status)}">${valTxt}</div>
+            <div class="pcell-meta">${metaTxt}</div>
+          </button>`;
+      }).join('');
+      daysGridEl.innerHTML = `${empties}${dayCells}`;
+    }
+
+    const detailEl = $('pnlSelectedDayDetail');
+    if (detailEl) {
+      const selObj = m.days.find((d) => d.dateKey === selectedKey) || m.days.find((d) => d.isToday) || m.days[0];
+      if (selObj) {
+        const stTxt = selObj.status === 'NONE' ? 'Chưa giao dịch' : formatPnlStatus(selObj.status);
+        const vCls = pnlTextClass(selObj.totalPnl, selObj.status);
+        detailEl.innerHTML = `
+          <span><strong>${formatDateKeyVN(selObj.dateKey)}</strong>${selObj.isToday ? ' <span class="cyan">(Hôm nay)</span>' : ''}:</span>
+          <span class="${vCls}"><strong>${stTxt} ${fmtSignedUsd(selObj.totalPnl, 2)}</strong></span>
+          <span class="muted">Đã chốt: ${fmtSignedUsd(selObj.realizedPnl, 2)} • Đang chạy: ${fmtSignedUsd(selObj.unrealizedPnl, 2)} • ${selObj.trades} lệnh (${selObj.wins}W/${selObj.losses}L) • Phí: -$${selObj.feeUsd.toFixed(2)}</span>`;
+      }
+    }
+
+    const yTitleEl = $('pnlModalYearTitle');
+    const yStatsEl = $('pnlModalYearStats');
+    if (yTitleEl) yTitleEl.textContent = `THÁNG TRONG NĂM ${y.year}`;
+    if (yStatsEl) {
+      yStatsEl.textContent = `${y.profitMonths} tháng lời • ${y.lossMonths} tháng lỗ • Tổng ${y.trades} lệnh`;
+    }
+
+    const monthsGridEl = $('pnlModalMonthsGrid');
+    if (monthsGridEl) {
+      monthsGridEl.innerHTML = y.months.map((mm) => {
+        const cls = [
+          'pnl-month-tile',
+          pnlStatusClass(mm.status),
+          mm.isCurrentMonth ? 'is-current' : '',
+          mm.isFuture ? 'is-future' : '',
+          mm.month === m.month ? 'is-selected' : ''
+        ].filter(Boolean).join(' ');
+        const hasVal = mm.trades > 0 || (mm.isCurrentMonth && Math.abs(mm.totalPnl) >= 0.005);
+        const valTxt = hasVal ? fmtSignedUsd(mm.totalPnl, 2) : '$0.00';
+        const stTxt = mm.status === 'NONE' ? 'CHƯA GD' : formatPnlStatus(mm.status);
+        return `
+          <button type="button" class="${cls}" data-pnl-month="${mm.month}">
+            <div class="pmt-top">
+              <strong>Tháng ${mm.month}</strong>
+              <span class="pmt-badge">${stTxt}</span>
+            </div>
+            <div class="pmt-val ${pnlTextClass(mm.totalPnl, mm.status)}">${valTxt}</div>
+            <div class="pmt-meta">${mm.activeDays} ngày • ${mm.trades} lệnh (${mm.wins}W/${mm.losses}L)</div>
+          </button>`;
+      }).join('');
+    }
+  }
+
+  function openPnlCalendarModal(focus = 'month') {
+    const modalEl = $('pnlCalendarModal');
+    if (!modalEl || typeof trading.getPnlCalendarReport !== 'function') return;
+    if (!pnlSelectedDateKey) {
+      const now = new Date();
+      pnlSelectedDateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
+    const report = trading.getPnlCalendarReport({ year: pnlViewYear, month: pnlViewMonth });
+    modalEl.classList.remove('hidden');
+    renderPnlModal(report, true);
+    motion.animateModalOpen(modalEl.querySelector('.modal-card'));
+
+    const targetMap = {
+      today: $('pnlModalHeroSection'),
+      month: $('pnlModalMonthSection'),
+      year: $('pnlModalYearSection')
+    };
+    const sec = targetMap[focus];
+    if (sec && typeof sec.scrollIntoView === 'function') {
+      setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60);
+    }
+  }
+
+  function closePnlCalendarModal() {
+    $('pnlCalendarModal')?.classList.add('hidden');
+  }
+
   function switchBlotterTab(tabKey) {
     activeBlotterTab = tabKey;
     document.querySelectorAll('.btab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tabKey));
-    const map = { positions: 'panePositions', orders: 'paneOrders', arb: 'paneArb', history: 'paneHistory', logs: 'paneLogs' };
+    const map = { positions: 'panePositions', orders: 'paneOrders', arb: 'paneArb', history: 'paneHistory', pnl: 'panePnl', logs: 'paneLogs' };
     Object.entries(map).forEach(([k, paneId]) => {
       const pane = $(paneId);
       if (pane) pane.classList.toggle('active', k === tabKey);
     });
+    if (tabKey === 'pnl' && typeof trading.getPnlCalendarReport === 'function') {
+      renderPnlBlotter(trading.getPnlCalendarReport({ year: pnlViewYear, month: pnlViewMonth }), true);
+    }
   }
 
   /* ==================== ZERO-TRUST 2FA HMAC OTP & LIVE ORDER ADAPTER ==================== */
@@ -1902,9 +2351,7 @@
     $('tfGroup').addEventListener('click', (e) => {
       const btn = e.target.closest('.tf-btn');
       if (!btn) return;
-      document.querySelectorAll('.tf-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      market.setTimeframe(btn.dataset.tf);
+      selectTimeframeUi(btn.dataset.tf, true);
     });
 
     $('btnSideLong').addEventListener('click', () => setSide('LONG'));
@@ -1999,7 +2446,101 @@
       if (coinMod && !coinMod.classList.contains('hidden') && e.key === 'Escape') {
         e.preventDefault();
         closeCoinPickerModal();
+        return;
       }
+      const pnlMod = $('pnlCalendarModal');
+      if (pnlMod && !pnlMod.classList.contains('hidden') && e.key === 'Escape') {
+        e.preventDefault();
+        closePnlCalendarModal();
+      }
+    });
+
+    const refreshPnlViews = () => {
+      if (typeof trading.getPnlCalendarReport !== 'function') return;
+      const rep = trading.getPnlCalendarReport({ year: pnlViewYear, month: pnlViewMonth });
+      updateKpiPeriodStrip(rep);
+      renderPnlBlotter(rep, true);
+      renderPnlModal(rep, true);
+    };
+
+    $('kpiPeriodPnl')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-pnl-focus]');
+      if (btn) openPnlCalendarModal(btn.dataset.pnlFocus);
+    });
+    $('btnOpenPnlModalFromBlotter')?.addEventListener('click', () => {
+      openPnlCalendarModal(pnlBlotterView === 'year' ? 'year' : 'month');
+    });
+    $('pnlBlotterSubviewGroup')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-pnl-subview]');
+      if (!btn) return;
+      pnlBlotterView = btn.dataset.pnlSubview === 'year' ? 'year' : 'month';
+      refreshPnlViews();
+    });
+    $('btnBlPnlPrev')?.addEventListener('click', () => {
+      if (pnlBlotterView === 'year') pnlViewYear -= 1;
+      else stepPnlMonth(-1);
+      refreshPnlViews();
+    });
+    $('btnBlPnlNext')?.addEventListener('click', () => {
+      if (pnlBlotterView === 'year') pnlViewYear += 1;
+      else stepPnlMonth(1);
+      refreshPnlViews();
+    });
+    $('btnBlPnlToday')?.addEventListener('click', () => {
+      jumpPnlToToday();
+      refreshPnlViews();
+    });
+    $('pnlBlotterGrid')?.addEventListener('click', (e) => {
+      const dayBtn = e.target.closest('[data-pnl-day]');
+      if (dayBtn) {
+        pnlSelectedDateKey = dayBtn.dataset.pnlDay;
+        openPnlCalendarModal('month');
+        return;
+      }
+      const mBtn = e.target.closest('[data-pnl-month]');
+      if (mBtn) {
+        pnlViewMonth = parseInt(mBtn.dataset.pnlMonth, 10) || pnlViewMonth;
+        pnlSelectedDateKey = `${pnlViewYear}-${String(pnlViewMonth).padStart(2, '0')}-01`;
+        pnlBlotterView = 'month';
+        refreshPnlViews();
+      }
+    });
+
+    $('btnClosePnlModal')?.addEventListener('click', closePnlCalendarModal);
+    $('pnlCalendarModal')?.addEventListener('click', (e) => {
+      if (e.target === $('pnlCalendarModal')) closePnlCalendarModal();
+    });
+    $('btnPnlMonthPrev')?.addEventListener('click', () => { stepPnlMonth(-1); refreshPnlViews(); });
+    $('btnPnlMonthNext')?.addEventListener('click', () => { stepPnlMonth(1); refreshPnlViews(); });
+    $('btnPnlJumpToday')?.addEventListener('click', () => { jumpPnlToToday(); refreshPnlViews(); });
+    $('btnPnlYearPrev')?.addEventListener('click', () => {
+      pnlViewYear -= 1;
+      pnlSelectedDateKey = `${pnlViewYear}-${String(pnlViewMonth).padStart(2, '0')}-01`;
+      refreshPnlViews();
+    });
+    $('btnPnlYearNext')?.addEventListener('click', () => {
+      pnlViewYear += 1;
+      pnlSelectedDateKey = `${pnlViewYear}-${String(pnlViewMonth).padStart(2, '0')}-01`;
+      refreshPnlViews();
+    });
+    $('pnlModalDaysGrid')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-pnl-day]');
+      if (!btn) return;
+      pnlSelectedDateKey = btn.dataset.pnlDay;
+      refreshPnlViews();
+    });
+    $('pnlModalMonthsGrid')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-pnl-month]');
+      if (!btn) return;
+      const targetM = parseInt(btn.dataset.pnlMonth, 10);
+      if (!targetM) return;
+      pnlViewMonth = targetM;
+      const rep = trading.getPnlCalendarReport({ year: pnlViewYear, month: pnlViewMonth });
+      const activeDay = rep.month.days.find((d) => d.isToday) || rep.month.days.find((d) => d.trades > 0) || rep.month.days[0];
+      pnlSelectedDateKey = activeDay ? activeDay.dateKey : `${pnlViewYear}-${String(pnlViewMonth).padStart(2, '0')}-01`;
+      updateKpiPeriodStrip(rep);
+      renderPnlBlotter(rep, true);
+      renderPnlModal(rep, true);
     });
 
     $('btnOpenCoinPicker').addEventListener('click', openCoinPickerModal);
@@ -2196,6 +2737,7 @@
         btnToggleForecast.textContent = candleRenderer.showForecast ? '🔮 Dự đoán: ON' : '🔮 Dự đoán: OFF';
         btnToggleForecast.classList.toggle('btn-cyan-outline', candleRenderer.showForecast);
         btnToggleForecast.classList.toggle('btn-ghost', !candleRenderer.showForecast);
+        renderChartForecastBar(market.getSymbolState());
       });
     }
 
@@ -2823,6 +3365,9 @@
         if (coinMod && !coinMod.classList.contains('hidden')) {
           renderCoinPickerModal();
         }
+      } else if (type === 'klinesUpdated' || type === 'timeframeChanged') {
+        candleRenderer._forecastCache.ts = 0;
+        updateMarketHUD(market.getSymbolState());
       } else if (type === 'tradePrint' && payload.print.whale) {
         sphereRenderer.triggerPulse('#fbbf24');
       }
@@ -2893,6 +3438,10 @@
         { label: 'Lọc sàn: Deribit Perp', category: 'VENUE', run: () => selectExchange('DERIBIT') },
         { label: 'Hiển thị tất cả 5 sàn (Aggregated)', category: 'VENUE', run: () => selectExchange('ALL') },
         { label: 'Mở Tab ⚡ Săn Funding Arbitrage (Delta-Neutral)', category: 'ARBITRAGE', run: () => switchBlotterTab('arb') },
+        { label: '📅 Mở Thống Kê Lời / Lỗ (Hôm nay • Tháng • Năm)', category: 'CAPITAL', run: () => openPnlCalendarModal('today') },
+        { label: '🔮 Khung nến 15m (Phân tích hướng Lên / Xuống)', category: 'CHART', run: () => selectTimeframeUi('15m', true) },
+        { label: '🔮 Khung nến 30m (Phân tích hướng Lên / Xuống)', category: 'CHART', run: () => selectTimeframeUi('30m', true) },
+        { label: '🔮 Khung nến 1h (Phân tích hướng Lên / Xuống)', category: 'CHART', run: () => selectTimeframeUi('1h', true) },
         { label: trading.botRunning ? 'Tạm dừng Bot tự động' : 'Chạy Bot tự động', category: 'BOT', run: () => trading.toggleBot() },
         { label: 'Chế độ rủi ro: 🛡 AN TOÀN (SAFE)', category: 'CAPITAL', run: () => trading.setRiskMode('SAFE') },
         { label: 'Chế độ rủi ro: ⚖️ CÂN BẰNG (BALANCED)', category: 'CAPITAL', run: () => trading.setRiskMode('BALANCED') },

@@ -51,6 +51,16 @@
     DERIBIT:     ['BTC-PERP', 'ETH-PERP', 'SOL-PERP', 'HYPE-PERP', 'BNB-PERP']
   };
 
+  const TIMEFRAME_SPECS = {
+    '1s':  { tf: '1s',  label: '1s',  tfMin: 1,  tfMs: 1000,    bybit: '1',  okx: '1m',  hl: '1m',  binance: '1m',  volMult: 1.0,  ticks: 4,   flowWeight: 1.0,  isHigherTf: false },
+    '5s':  { tf: '5s',  label: '5s',  tfMin: 1,  tfMs: 5000,    bybit: '1',  okx: '1m',  hl: '1m',  binance: '1m',  volMult: 1.45, ticks: 12,  flowWeight: 0.95, isHigherTf: false },
+    '1m':  { tf: '1m',  label: '1m',  tfMin: 1,  tfMs: 60000,   bybit: '1',  okx: '1m',  hl: '1m',  binance: '1m',  volMult: 2.2,  ticks: 24,  flowWeight: 0.85, isHigherTf: false },
+    '5m':  { tf: '5m',  label: '5m',  tfMin: 5,  tfMs: 300000,  bybit: '5',  okx: '5m',  hl: '5m',  binance: '5m',  volMult: 3.4,  ticks: 45,  flowWeight: 0.55, isHigherTf: true },
+    '15m': { tf: '15m', label: '15m', tfMin: 15, tfMs: 900000,  bybit: '15', okx: '15m', hl: '15m', binance: '15m', volMult: 4.8,  ticks: 90,  flowWeight: 0.30, isHigherTf: true },
+    '30m': { tf: '30m', label: '30m', tfMin: 30, tfMs: 1800000, bybit: '30', okx: '30m', hl: '30m', binance: '30m', volMult: 6.2,  ticks: 140, flowWeight: 0.22, isHigherTf: true },
+    '1h':  { tf: '1h',  label: '1h',  tfMin: 60, tfMs: 3600000, bybit: '60', okx: '1H',  hl: '1h',  binance: '1h',  volMult: 8.0,  ticks: 220, flowWeight: 0.15, isHigherTf: true }
+  };
+
   class MarketEngine {
     constructor(deps = {}) {
       this._uuid = deps.QuantumUUID || QuantumUUID;
@@ -135,6 +145,7 @@
         funding8h: venueFunding8h.BINANCE,
         oiBillions: cfg.oi,
         candles,
+        tfCandles: {},
         signalCandles: candles.map((c) => ({ ...c })),
         currentCandle: { ...candles[candles.length - 1] },
         candleTickCounter: 0,
@@ -509,29 +520,41 @@
       this._emit('exchangeChanged', exId);
     }
 
+    getTimeframeSpec(tf = this.timeframe) {
+      return TIMEFRAME_SPECS[tf] || TIMEFRAME_SPECS['1m'];
+    }
+
     setTimeframe(tf) {
-      this.timeframe = tf;
+      const spec = this.getTimeframeSpec(tf);
+      this.timeframe = spec.tf;
+      const st = this.getSymbolState(this.activeSymbol);
       if (this.wsEnabled) {
+        if (st && st.tfCandles?.[spec.tf]?.length >= 10) {
+          st.candles = st.tfCandles[spec.tf].map((c) => ({ ...c }));
+          st.currentCandle = { ...st.candles[st.candles.length - 1] };
+        }
         this.fetchVenueKlines(this.activeSymbol, this.activeExchange);
       } else {
-        const tfVolMult = { '1s': 1.0, '5s': 1.45, '1m': 2.2, '5m': 3.4 }[tf] || 1.0;
-        const st = this.getSymbolState(this.activeSymbol);
         const cfg = this.instruments[this.activeSymbol];
         if (st && cfg) {
-          st.candles = this._seedCandles(st.price, cfg.vol * tfVolMult, 110);
+          st.candles = this._seedCandles(st.price, cfg.vol * spec.volMult, 110);
+          if (!st.tfCandles) st.tfCandles = {};
+          st.tfCandles[spec.tf] = st.candles.map((c) => ({ ...c }));
           st.currentCandle = { ...st.candles[st.candles.length - 1] };
           st.price = st.currentCandle.c;
           st.prevPrice = st.price;
         }
       }
-      this._emit('timeframeChanged', tf);
+      this._emit('timeframeChanged', spec.tf);
     }
 
     _rebaseSymbolToPrice(st, newPrice) {
       const cfg = this.instruments[st.symbol];
       if (!cfg || !Number.isFinite(newPrice) || newPrice <= 0) return;
-      const tfVolMult = { '1s': 1.0, '5s': 1.45, '1m': 2.2, '5m': 3.4 }[this.timeframe] || 1.0;
-      st.candles = this._seedCandles(newPrice, cfg.vol * tfVolMult, 110);
+      const spec = this.getTimeframeSpec();
+      st.candles = this._seedCandles(newPrice, cfg.vol * spec.volMult, 110);
+      if (!st.tfCandles) st.tfCandles = {};
+      st.tfCandles[spec.tf] = st.candles.map((c) => ({ ...c }));
       st.currentCandle = { ...st.candles[st.candles.length - 1] };
       st.open24h = st.candles[0].o;
       st.price = newPrice;
@@ -574,11 +597,14 @@
       const cfg = this.instruments[sym];
       if (!cfg || typeof fetch !== 'function') return;
       const ex = exchange && exchange !== 'ALL' ? exchange : (cfg.wsBinance ? 'BINANCE' : 'HYPERLIQUID');
-      const tfMin = this.timeframe === '5m' ? 5 : 1;
+      const spec = this.getTimeframeSpec();
+      const tfMin = spec.tfMin;
 
       const applyParsedCandles = (parsed, targetEx) => {
         if (!Array.isArray(parsed) || parsed.length < 10) return false;
         const st = this.state[sym];
+        if (!st.tfCandles) st.tfCandles = {};
+        st.tfCandles[spec.tf] = parsed.map((c) => ({ ...c }));
         st.candles = parsed;
         if (tfMin === 1 || !st.signalCandles || st.signalCandles.length < 22) {
           st.signalCandles = parsed.map((c) => ({ ...c }));
@@ -595,12 +621,13 @@
         this._hydrateLiveOrderflowFromCandles(st, st.signalCandles);
         this._rebuildOrderbook(st);
         st.lastLiveAt = Date.now();
+        this._emit('klinesUpdated', { symbol: sym, timeframe: spec.tf });
         return true;
       };
 
       try {
         if (ex === 'BYBIT' && cfg.bybitSym) {
-          const res = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${cfg.bybitSym}&interval=${tfMin}&limit=100`);
+          const res = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${cfg.bybitSym}&interval=${spec.bybit}&limit=100`);
           if (res.ok) {
             const json = await res.json();
             const list = json?.result?.list;
@@ -612,8 +639,7 @@
             }
           }
         } else if (ex === 'OKX' && cfg.okxInst) {
-          const bar = tfMin === 5 ? '5m' : '1m';
-          const res = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${cfg.okxInst}&bar=${bar}&limit=100`);
+          const res = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${cfg.okxInst}&bar=${spec.okx}&limit=100`);
           if (res.ok) {
             const json = await res.json();
             const rows = json?.data;
@@ -626,13 +652,12 @@
           }
         } else if (ex === 'HYPERLIQUID' && cfg.hlCoin) {
           const now = Date.now();
-          const interval = tfMin === 5 ? '5m' : '1m';
           const res = await fetch('https://api.hyperliquid.xyz/info', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               type: 'candleSnapshot',
-              req: { coin: cfg.hlCoin, interval, startTime: now - 100 * tfMin * 60000, endTime: now }
+              req: { coin: cfg.hlCoin, interval: spec.hl, startTime: now - 100 * tfMin * 60000, endTime: now }
             })
           });
           if (res.ok) {
@@ -653,7 +678,8 @@
     async _fetchBinanceKlines(sym) {
       const cfg = this.instruments[sym];
       if (!cfg || !cfg.wsBinance || typeof fetch !== 'function') return;
-      const interval = this.timeframe === '5m' ? '5m' : '1m';
+      const spec = this.getTimeframeSpec();
+      const interval = spec.binance;
       try {
         const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cfg.wsBinance.toUpperCase()}&interval=${interval}&limit=100`;
         const res = await fetch(url);
@@ -672,8 +698,10 @@
           .filter((c) => Number.isFinite(c.o) && Number.isFinite(c.h) && Number.isFinite(c.l) && Number.isFinite(c.c));
         if (parsed.length < 10) return;
         const st = this.state[sym];
+        if (!st.tfCandles) st.tfCandles = {};
+        st.tfCandles[spec.tf] = parsed.map((c) => ({ ...c }));
         st.candles = parsed;
-        if (interval === '1m' || !st.signalCandles || st.signalCandles.length < 22) {
+        if (spec.tfMin === 1 || !st.signalCandles || st.signalCandles.length < 22) {
           st.signalCandles = parsed.map((c) => ({ ...c }));
         }
         st.currentCandle = { ...parsed[parsed.length - 1] };
@@ -683,6 +711,7 @@
         this._hydrateLiveOrderflowFromCandles(st, st.signalCandles);
         this._rebuildOrderbook(st);
         st.lastLiveAt = Date.now();
+        this._emit('klinesUpdated', { symbol: sym, timeframe: spec.tf });
       } catch (_) {
         // Silent fallback if offline or CORS blocked
       }
@@ -1554,8 +1583,211 @@
       };
     }
 
+    getTimeframeForecast(sym = this.activeSymbol, tf = this.timeframe) {
+      const spec = this.getTimeframeSpec(tf);
+      const st = this.state[sym];
+      const cfg = this.instruments[sym] || this.instruments['BTC-PERP'];
+
+      let srcCandles = null;
+      if (st?.tfCandles?.[spec.tf] && st.tfCandles[spec.tf].length >= 22) {
+        srcCandles = st.tfCandles[spec.tf];
+      } else if (spec.tf === this.timeframe && Array.isArray(st?.candles) && st.candles.length >= 22) {
+        srcCandles = st.candles;
+      } else if (spec.tfMin > 1 && Array.isArray(st?.signalCandles) && st.signalCandles.length >= 22) {
+        const agg = this._aggregateCandles(st.signalCandles, spec.tfMin);
+        srcCandles = agg.length >= 22 ? agg : st.candles;
+      } else {
+        srcCandles = st?.candles;
+      }
+
+      const fallbackPx = st?.price || cfg.base || 100;
+      if (!st || !Array.isArray(srcCandles) || srcCandles.length < 22) {
+        return {
+          symbol: sym,
+          timeframe: spec.tf,
+          tfLabel: spec.label.toUpperCase(),
+          direction: 'SIDEWAYS',
+          lean: 'UP',
+          side: 'WAIT',
+          directionLabel: 'ĐANG QUÉT NẾN...',
+          score: 0,
+          probabilityUp: 50,
+          probabilityDown: 50,
+          confidence: 50,
+          lastPrice: fallbackPx,
+          targetPrice: fallbackPx,
+          targetMovePct: 0,
+          suggestedSlPct: 0.65,
+          suggestedTpPct: 1.50,
+          supportPrice: fallbackPx * 0.99,
+          resistancePrice: fallbackPx * 1.01,
+          rsi: 50,
+          zScore: 0,
+          atrPct: Number((cfg.vol * 100 * spec.volMult).toFixed(3)),
+          summary: `Đang thu thập dữ liệu nến ${spec.label}`
+        };
+      }
+
+      const recentCandles = srcCandles.slice(-60);
+      const closes = recentCandles.map((c) => c.c);
+      const n = closes.length;
+      const calcEmaSeries = (arr, period) => {
+        const k = 2 / (period + 1);
+        const out = [arr[0]];
+        for (let i = 1; i < arr.length; i++) {
+          out.push(arr[i] * k + out[i - 1] * (1 - k));
+        }
+        return out;
+      };
+
+      const ema8Series = calcEmaSeries(closes, 8);
+      const ema21Series = calcEmaSeries(closes, 21);
+      const ema50Series = calcEmaSeries(closes, 50);
+
+      const ema8 = ema8Series[n - 1];
+      const ema8Prev = ema8Series[Math.max(0, n - 4)];
+      const ema21 = ema21Series[n - 1];
+      const ema50 = ema50Series[n - 1];
+      const lastClose = closes[n - 1];
+
+      const emaSpread821Pct = ((ema8 - ema21) / Math.max(1e-9, ema21)) * 100;
+      const emaSpread2150Pct = ((ema21 - ema50) / Math.max(1e-9, ema50)) * 100;
+      const emaSlopePct = ((ema8 - ema8Prev) / Math.max(1e-9, ema8Prev)) * 100;
+
+      const macdSeries = ema8Series.map((v, idx) => v - ema21Series[idx]);
+      const macdSigSeries = calcEmaSeries(macdSeries, 5);
+      const histNow = macdSeries[n - 1] - macdSigSeries[n - 1];
+      const histPrev = macdSeries[Math.max(0, n - 2)] - macdSigSeries[Math.max(0, n - 2)];
+      const macdHistPct = (histNow / Math.max(1e-9, lastClose)) * 100;
+      const macdAccelPct = ((histNow - histPrev) / Math.max(1e-9, lastClose)) * 100;
+
+      let trSum = 0;
+      const atrStart = Math.max(1, n - 14);
+      const atrCount = Math.max(1, n - atrStart);
+      for (let i = atrStart; i < n; i++) {
+        const cur = recentCandles[i];
+        const prevC = Math.max(1e-9, recentCandles[i - 1].c);
+        const tr = Math.max(cur.h - cur.l, Math.abs(cur.h - prevC), Math.abs(cur.l - prevC));
+        trSum += (tr / prevC) * 100;
+      }
+      const atrPct = trSum / atrCount;
+
+      const bbSlice = closes.slice(-20);
+      const bbMean = bbSlice.reduce((a, b) => a + b, 0) / bbSlice.length;
+      const bbVar = bbSlice.reduce((acc, v) => acc + (v - bbMean) ** 2, 0) / bbSlice.length;
+      const bbStd = Math.sqrt(bbVar);
+      const zScore = bbStd > 1e-9 ? (lastClose - bbMean) / bbStd : 0;
+
+      let gains = 0;
+      let losses = 0;
+      for (let i = Math.max(1, n - 14); i < n; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+      }
+      const rsi = (gains === 0 && losses === 0)
+        ? 50
+        : (100 - 100 / (1 + gains / Math.max(1e-9, losses)));
+
+      const srSlice = recentCandles.slice(-20);
+      let supportPrice = Infinity;
+      let resistancePrice = -Infinity;
+      for (const bar of srSlice) {
+        if (bar.l < supportPrice) supportPrice = bar.l;
+        if (bar.h > resistancePrice) resistancePrice = bar.h;
+      }
+      if (!Number.isFinite(supportPrice)) supportPrice = lastClose * 0.99;
+      if (!Number.isFinite(resistancePrice)) resistancePrice = lastClose * 1.01;
+
+      const ref3 = recentCandles[Math.max(0, n - 4)].o;
+      const barMomPct = ((lastClose - ref3) / Math.max(1e-9, ref3)) * 100;
+      const lastBar = recentCandles[n - 1];
+      const barRange = Math.max(1e-9, lastBar.h - lastBar.l);
+      const upperWickPct = (lastBar.h - Math.max(lastBar.o, lastBar.c)) / barRange;
+      const lowerWickPct = (Math.min(lastBar.o, lastBar.c) - lastBar.l) / barRange;
+
+      const normAtr = Math.max(0.08, atrPct);
+      const trendScore =
+        (emaSpread821Pct / normAtr) * 24 +
+        (emaSpread2150Pct / normAtr) * 14 +
+        (emaSlopePct / normAtr) * 26;
+      const momScore =
+        (macdHistPct / normAtr) * 34 +
+        (macdAccelPct / normAtr) * 32 +
+        (barMomPct / normAtr) * 10;
+      const rsiBias = (rsi - 50) * 0.45;
+      const bidRatio = st.orderbook?.bidRatio ?? 0.5;
+      const cvdArr = st.cvdHistory || [];
+      const cvdSlope = cvdArr.length >= 5 ? cvdArr[cvdArr.length - 1] - cvdArr[cvdArr.length - 5] : 0;
+      const flowScore = ((bidRatio - 0.5) * 90 + Math.max(-14, Math.min(14, cvdSlope * 8))) * spec.flowWeight;
+
+      let rawScore = trendScore + momScore + rsiBias + flowScore;
+
+      // Wick rejection & extreme RSI mean-reversion damping
+      if (rawScore > 0 && upperWickPct >= 0.62 && lastBar.c < lastBar.o) rawScore *= 0.65;
+      else if (rawScore < 0 && lowerWickPct >= 0.62 && lastBar.c > lastBar.o) rawScore *= 0.65;
+
+      if (rawScore > 0 && rsi >= 78 && zScore >= 2.0) rawScore *= 0.60;
+      else if (rawScore < 0 && rsi <= 22 && zScore <= -2.0) rawScore *= 0.60;
+
+      const score = Math.max(-100, Math.min(100, Math.round(rawScore)));
+      const direction = score >= 12 ? 'UP' : (score <= -12 ? 'DOWN' : 'SIDEWAYS');
+      const lean = score >= 0 ? 'UP' : 'DOWN';
+      const side = direction === 'UP' ? 'LONG' : (direction === 'DOWN' ? 'SHORT' : 'WAIT');
+
+      const probabilityUp = Math.max(12, Math.min(88, Math.round(50 + score * 0.42)));
+      const probabilityDown = 100 - probabilityUp;
+      const confidence = Math.max(50, Math.min(95, Math.max(probabilityUp, probabilityDown)));
+
+      let directionLabel;
+      if (score >= 42) directionLabel = 'TĂNG MẠNH ↗';
+      else if (score >= 12) directionLabel = 'HƯỚNG LÊN ↗';
+      else if (score <= -42) directionLabel = 'GIẢM MẠNH ↘';
+      else if (score <= -12) directionLabel = 'HƯỚNG XUỐNG ↘';
+      else directionLabel = lean === 'UP' ? 'ĐI NGANG ↔ (NGHIÊNG LÊN)' : 'ĐI NGANG ↔ (NGHIÊNG XUỐNG)';
+
+      const baseMovePct = Math.max(0.22, Math.min(6.5, atrPct * (1.35 + Math.abs(score) / 140)));
+      const dirSign = lean === 'UP' ? 1 : -1;
+      const targetMovePct = Number((dirSign * baseMovePct).toFixed(2));
+      const targetPrice = lastClose * (1 + targetMovePct / 100);
+      const suggestedSlPct = Number(Math.max(0.30, Math.min(3.5, atrPct * 1.85)).toFixed(2));
+      const suggestedTpPct = Number(Math.max(0.65, Math.min(7.5, Math.max(suggestedSlPct * 2.0, baseMovePct))).toFixed(2));
+
+      const emaTag = ema8 >= ema21
+        ? (ema21 >= ema50 ? 'EMA8>21>50' : 'EMA8>21')
+        : (ema21 <= ema50 ? 'EMA8<21<50' : 'EMA8<21');
+      const macdTag = histNow >= 0 ? 'MACD↑' : 'MACD↓';
+      const summary = `${emaTag} • ${macdTag} • RSI ${Math.round(rsi)} • Z ${zScore.toFixed(1)}`;
+
+      return {
+        symbol: sym,
+        timeframe: spec.tf,
+        tfLabel: spec.label.toUpperCase(),
+        direction,
+        lean,
+        side,
+        directionLabel,
+        score,
+        probabilityUp,
+        probabilityDown,
+        confidence,
+        lastPrice: lastClose,
+        targetPrice,
+        targetMovePct,
+        suggestedSlPct,
+        suggestedTpPct,
+        supportPrice,
+        resistancePrice,
+        rsi,
+        zScore,
+        atrPct,
+        summary
+      };
+    }
+
     tick() {
-      const tfTicks = { '1s': 4, '5s': 12, '1m': 24, '5m': 45 }[this.timeframe] || 4;
+      const tfSpec = this.getTimeframeSpec();
+      const tfTicks = tfSpec.ticks;
 
       if (this.shockTicksRemaining > 0) {
         this.shockTicksRemaining--;
@@ -1649,15 +1881,22 @@
         c.l = Math.min(c.l, st.price);
         c.v += (this.wsEnabled ? 0.8 + Math.abs(deltaPct) * 600 : 2.5 + Math.random() * 14) * (1 + this.shockIntensity * 4.5);
         st.candles[st.candles.length - 1] = { ...c };
+        if (st.tfCandles?.[tfSpec.tf]?.length > 0) {
+          st.tfCandles[tfSpec.tf][st.tfCandles[tfSpec.tf].length - 1] = { ...c };
+        }
 
         if (this.wsEnabled && this.shockIntensity <= 0.15) {
           const nowTs = Date.now();
-          const tfMs = { '1s': 1000, '5s': 5000, '1m': 60000, '5m': 300000 }[this.timeframe] || 60000;
+          const tfMs = tfSpec.tfMs;
           if (nowTs - c.t >= tfMs) {
             const nextCandle = { t: nowTs, o: st.price, h: st.price, l: st.price, c: st.price, v: 1 };
             st.currentCandle = nextCandle;
             st.candles.push(nextCandle);
             if (st.candles.length > 130) st.candles.shift();
+            if (st.tfCandles?.[tfSpec.tf]) {
+              st.tfCandles[tfSpec.tf].push({ ...nextCandle });
+              if (st.tfCandles[tfSpec.tf].length > 130) st.tfCandles[tfSpec.tf].shift();
+            }
           }
           if (Array.isArray(st.signalCandles) && st.signalCandles.length > 0) {
             const sigLast = st.signalCandles[st.signalCandles.length - 1];

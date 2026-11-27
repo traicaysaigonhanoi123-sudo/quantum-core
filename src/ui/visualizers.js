@@ -376,6 +376,44 @@
       }
 
       const sig = this.market.getDirectionalSignal(st.symbol);
+      const tf = this.market.timeframe || '1m';
+      const tfSpec = typeof this.market.getTimeframeSpec === 'function'
+        ? this.market.getTimeframeSpec(tf)
+        : { tf, label: tf, isHigherTf: tf !== '1s' && tf !== '5s' && tf !== '1m' };
+      const tfForecast = typeof this.market.getTimeframeForecast === 'function'
+        ? this.market.getTimeframeForecast(st.symbol, tf)
+        : null;
+
+      if (tfSpec.isHigherTf && tfForecast) {
+        const dirSide = tfForecast.lean === 'UP' ? 'LONG' : 'SHORT';
+        const slPct = Number(tfForecast.suggestedSlPct || 0.75);
+        const tpPct = Number(tfForecast.suggestedTpPct || 1.80);
+        const dir = dirSide === 'SHORT' ? -1 : 1;
+        const projSL = activePx * (1 - dir * (slPct / 100));
+        const projTP = activePx * (1 + dir * (tpPct / 100));
+        const status = tfForecast.direction !== 'SIDEWAYS'
+          ? (Math.abs(tfForecast.score) >= 34 ? 'READY' : 'FORMING')
+          : 'FORMING';
+
+        const data = {
+          sig,
+          tfForecast,
+          isHigherTf: true,
+          tfLabel: tfForecast.tfLabel || tf.toUpperCase(),
+          dirSide,
+          reqScore: 34,
+          absScore: Math.abs(tfForecast.score || 0),
+          slPct,
+          tpPct,
+          projSL,
+          projTP,
+          status,
+          streak: 0
+        };
+        this._forecastCache = { key, ts: now, data };
+        return data;
+      }
+
       const slPct = Number(sig.suggestedSlPct || 0.65);
       const plan = (this.trading && typeof this.trading.computeCapitalPlan === 'function')
         ? this.trading.computeCapitalPlan(undefined, undefined, { symbol: st.symbol, exchange: ex, slPct, isMaker: false })
@@ -412,6 +450,9 @@
 
       const data = {
         sig,
+        tfForecast,
+        isHigherTf: false,
+        tfLabel: String(tf).toUpperCase(),
         dirSide,
         reqScore,
         absScore,
@@ -542,12 +583,29 @@
         pillText = `✅ ĐANG GIỮ ${symPos[0].side} • THEO DÕI SL/TP`;
         pillColor = '#38bdf8';
         pillBorder = 'rgba(56, 189, 248, 0.55)';
+      } else if (f.isHigherTf && f.tfForecast) {
+        const tff = f.tfForecast;
+        const fmtTgt = this.market.formatPrice(tff.targetPrice, st.symbol);
+        const absMv = Math.abs(tff.targetMovePct || 0).toFixed(2);
+        if (tff.direction === 'UP') {
+          pillText = `🔮 KHUNG ${tff.tfLabel}: DỰ ĐOÁN HƯỚNG LÊN ↗ (${tff.probabilityUp}%) • Mục tiêu ${fmtTgt} (+${absMv}%)`;
+          pillColor = '#34d399';
+          pillBorder = 'rgba(52, 211, 153, 0.65)';
+        } else if (tff.direction === 'DOWN') {
+          pillText = `🔮 KHUNG ${tff.tfLabel}: DỰ ĐOÁN HƯỚNG XUỐNG ↘ (${tff.probabilityDown}%) • Mục tiêu ${fmtTgt} (-${absMv}%)`;
+          pillColor = '#ff3b6b';
+          pillBorder = 'rgba(255, 59, 107, 0.65)';
+        } else {
+          pillText = `🔮 KHUNG ${tff.tfLabel}: ĐI NGANG ↔ (${tff.lean === 'UP' ? 'Nghiêng lên' : 'Nghiêng xuống'} ${tff.confidence}%)`;
+          pillColor = '#fbbf24';
+          pillBorder = 'rgba(251, 191, 36, 0.55)';
+        }
       } else if (f.status === 'READY' && f.dirSide) {
-        pillText = `⚡ SẮP VÀO ${f.dirSide} (${f.sig.confidence}%) • XN ${f.streak}/3 • TP +${f.tpPct.toFixed(1)}% / SL -${f.slPct.toFixed(1)}%`;
+        pillText = `⚡ [${f.tfLabel}] SẮP VÀO ${f.dirSide} (${f.sig.confidence}%) • XN ${f.streak}/3 • TP +${f.tpPct.toFixed(1)}% / SL -${f.slPct.toFixed(1)}%`;
         pillColor = f.dirSide === 'LONG' ? '#34d399' : '#ff3b6b';
         pillBorder = f.dirSide === 'LONG' ? 'rgba(52, 211, 153, 0.65)' : 'rgba(255, 59, 107, 0.65)';
       } else if (f.status === 'FORMING' && f.dirSide) {
-        pillText = `🔮 DỰ ĐOÁN ${f.dirSide} (${f.sig.confidence}%) • Điểm ${f.absScore}/${f.reqScore}`;
+        pillText = `🔮 [${f.tfLabel}] DỰ ĐOÁN ${f.dirSide} (${f.sig.confidence}%) • Điểm ${f.absScore}/${f.reqScore}`;
         pillColor = '#fbbf24';
         pillBorder = 'rgba(251, 191, 36, 0.55)';
       } else {
