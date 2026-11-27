@@ -196,7 +196,8 @@
             price: st ? st.venuePrices[exId] : cfg.base,
             change24hPct: 0,
             funding8h: st ? st.venueFunding8h[exId] : 0.01,
-            volume24hUsd: Math.max(1e6, cfg.oi * 1e9 * (1 - idx * 0.05))
+            volume24hUsd: Math.max(1e6, cfg.oi * 1e9 * (1 - idx * 0.05)),
+            isSeed: true
           };
         });
       });
@@ -314,7 +315,8 @@
           price: px,
           change24hPct: Number.isFinite(Number(raw.change24hPct)) ? Number(raw.change24hPct) : undefined,
           funding8h: Number.isFinite(Number(raw.funding8h)) ? Number(raw.funding8h) : undefined,
-          volume24hUsd: vol
+          volume24hUsd: vol,
+          isLive: true
         });
       }
 
@@ -405,6 +407,7 @@
 
       const st = this.state[sym];
       Object.entries(venueMatches).forEach(([vId, item]) => {
+        if (!item || !item.isLive) return;
         if (vId === 'HYPERLIQUID') st.liveHlPrice = item.price;
         if (vId === 'BINANCE' || !st.liveWsPrice) st.liveWsPrice = item.price;
         this.applyLiveVenueQuote(sym, vId, item.price, item.funding8h, item.change24hPct);
@@ -412,6 +415,30 @@
 
       if (this._liveWsStarted && this.wsEnabled && this.instruments[sym].wsBinance && !this.wsSockets[sym]) {
         this._openBinanceWsForSymbol(sym);
+      }
+      return st;
+    }
+
+    hasLiveQuote(sym = this.activeSymbol) {
+      const st = this.state[sym];
+      if (!st) return false;
+      return Boolean(
+        st.lastLiveAt > 0 ||
+        Number.isFinite(st.liveWsPrice) ||
+        Number.isFinite(st.liveHlPrice) ||
+        (st.liveVenuePrices && Object.keys(st.liveVenuePrices).length > 0)
+      );
+    }
+
+    anchorSymbolPrice(sym, exchange, price) {
+      const refPx = Number(price);
+      const st = this.ensureInstrument(sym, Number.isFinite(refPx) && refPx > 0 ? { price: refPx } : {});
+      if (!st) return null;
+      if (!this.hasLiveQuote(sym) && Number.isFinite(refPx) && refPx > 0) {
+        this._rebaseSymbolToPrice(st, refPx);
+        st.shockSigma = 0.35;
+        st.realizedVol = 36;
+        st._justHydratedLive = true;
       }
       return st;
     }
@@ -561,6 +588,9 @@
       st.prevPrice = newPrice;
       st.regimeDrift = 0;
       st.flowImbalance = 0;
+      st.shockSigma = 0.35;
+      st.realizedVol = Math.min(st.realizedVol || 36, 42);
+      st._justHydratedLive = true;
       EXCHANGES.forEach((ex, idx) => {
         const basis = (idx - 2) * 0.00004;
         if (st.venueBasis) st.venueBasis[ex.id] = basis;
@@ -603,6 +633,7 @@
       const applyParsedCandles = (parsed, targetEx) => {
         if (!Array.isArray(parsed) || parsed.length < 10) return false;
         const st = this.state[sym];
+        const hadAnyLive = this.hasLiveQuote(sym);
         if (!st.tfCandles) st.tfCandles = {};
         st.tfCandles[spec.tf] = parsed.map((c) => ({ ...c }));
         st.candles = parsed;
@@ -614,6 +645,16 @@
         const latestC = st.currentCandle.c;
         st.price = latestC;
         st.prevPrice = latestC;
+        if (!hadAnyLive) {
+          EXCHANGES.forEach((exItem) => {
+            if (!st.liveVenuePrices?.[exItem.id]) {
+              st.venuePrices[exItem.id] = latestC;
+            }
+          });
+          st.shockSigma = 0.35;
+          st.realizedVol = Math.min(st.realizedVol || 36, 42);
+          st._justHydratedLive = true;
+        }
         if (targetEx && st.venuePrices[targetEx]) {
           st.venuePrices[targetEx] = latestC;
           st.liveVenuePrices[targetEx] = latestC;
@@ -698,6 +739,7 @@
           .filter((c) => Number.isFinite(c.o) && Number.isFinite(c.h) && Number.isFinite(c.l) && Number.isFinite(c.c));
         if (parsed.length < 10) return;
         const st = this.state[sym];
+        const hadAnyLive = this.hasLiveQuote(sym);
         if (!st.tfCandles) st.tfCandles = {};
         st.tfCandles[spec.tf] = parsed.map((c) => ({ ...c }));
         st.candles = parsed;
@@ -708,6 +750,16 @@
         st.open24h = parsed[0].o;
         st.price = st.currentCandle.c;
         st.prevPrice = st.price;
+        if (!hadAnyLive) {
+          EXCHANGES.forEach((exItem) => {
+            if (!st.liveVenuePrices?.[exItem.id]) {
+              st.venuePrices[exItem.id] = st.price;
+            }
+          });
+          st.shockSigma = 0.35;
+          st.realizedVol = Math.min(st.realizedVol || 36, 42);
+          st._justHydratedLive = true;
+        }
         this._hydrateLiveOrderflowFromCandles(st, st.signalCandles);
         this._rebuildOrderbook(st);
         st.lastLiveAt = Date.now();
@@ -752,7 +804,7 @@
       if (!st) return;
       if (!st.liveVenuePrices) st.liveVenuePrices = {};
       if (!st.venueChange24hPct) st.venueChange24hPct = {};
-      const hadAnyLive = Boolean(st.liveWsPrice || st.liveHlPrice || Object.keys(st.liveVenuePrices).length > 0);
+      const hadAnyLive = Boolean(st.lastLiveAt > 0 || st.liveWsPrice || st.liveHlPrice || Object.keys(st.liveVenuePrices).length > 0);
       st.liveVenuePrices[venueId] = px;
       st.venuePrices[venueId] = px;
       st.lastLiveAt = Date.now();
@@ -766,7 +818,7 @@
         }
       }
       const isPrimary = this.activeExchange === venueId || (this.activeExchange === 'ALL' && !st.liveWsPrice && venueId === 'HYPERLIQUID');
-      if ((!hadAnyLive || isPrimary) && Math.abs(px - st.price) / Math.max(1e-9, st.price) > 0.02) {
+      if (!hadAnyLive || (isPrimary && Math.abs(px - st.price) / Math.max(1e-9, st.price) > 0.02)) {
         this._rebaseSymbolToPrice(st, px);
         st.venuePrices[venueId] = px;
         st.liveVenuePrices[venueId] = px;
@@ -1094,7 +1146,7 @@
 
       this._emit('wsStatus', { connected: false, text: 'WS: LIVE...' });
 
-      const activeTargets = new Set([...this.coreSymbols, this.activeSymbol]);
+      const activeTargets = new Set([...this.coreSymbols, this.activeSymbol, ...Object.keys(this.state)]);
       activeTargets.forEach((sym) => {
         if (!this.instruments[sym]) return;
         this.fetchVenueKlines(sym, this.activeExchange);
@@ -1105,7 +1157,7 @@
       this.hlPollTimer = setInterval(() => this._pollVenueLive('HYPERLIQUID'), 4000);
       this.otherVenuesPollTimer = setInterval(() => this._pollVenueLive('ALL'), 4000);
       this.klinePollTimer = setInterval(() => {
-        const pollSyms = new Set([...this.coreSymbols, this.activeSymbol]);
+        const pollSyms = new Set([...this.coreSymbols, this.activeSymbol, ...Object.keys(this.state)]);
         pollSyms.forEach((sym) => this.fetchVenueKlines(sym, this.activeExchange));
       }, 60000);
     }
@@ -1803,6 +1855,13 @@
 
         let deltaPct = 0;
         let nextPrice = st.price;
+        const justHydrated = Boolean(st._justHydratedLive);
+        if (justHydrated) {
+          st._justHydratedLive = false;
+          st.prevPrice = st.price;
+          st.shockSigma = 0.35;
+        }
+        const hasLive = this.hasLiveQuote(sym);
         const liveAnchor = this.wsEnabled
           ? ((this.activeExchange && this.activeExchange !== 'ALL' && st.liveVenuePrices?.[this.activeExchange])
             || st.liveWsPrice
@@ -1817,6 +1876,9 @@
           deltaPct = shockImpulse + whip;
           st.flowImbalance = st.flowImbalance * 0.65 + this.shockDirection * 0.75 * 0.35;
           nextPrice = Math.max(cfg.tick * 10, st.price * (1 + deltaPct));
+        } else if (justHydrated) {
+          nextPrice = st.price;
+          deltaPct = 0;
         } else if (liveAnchor) {
           nextPrice = Math.max(cfg.tick * 10, liveAnchor);
           deltaPct = (nextPrice - st.prevPrice) / Math.max(1e-9, st.prevPrice);
@@ -1828,6 +1890,10 @@
             const sigHint = (((lc.c - lc.l) - (lc.h - lc.c)) / rng) * 0.28;
             st.flowImbalance = st.flowImbalance * 0.94 + sigHint * 0.06;
           }
+        } else if (this._liveWsStarted && !hasLive) {
+          // Wait quietly for first live WS/REST quote instead of synthetic random-walk drifts
+          nextPrice = st.price;
+          deltaPct = 0;
         } else {
           st.regimeTicksLeft--;
           if (st.regimeTicksLeft <= 0) {
@@ -1936,8 +2002,10 @@
         const targetVol = 34 + Math.abs(deltaPct) * 28000 + this.shockIntensity * 96;
         st.realizedVol = st.realizedVol * 0.85 + targetVol * 0.15;
 
-        const targetSigma = 0.35 + Math.abs(deltaPct) * 420 + this.shockIntensity * 3.85;
-        st.shockSigma = st.shockSigma * 0.78 + targetSigma * 0.22;
+        const targetSigma = (justHydrated || (this._liveWsStarted && !hasLive && this.shockIntensity <= 0.15))
+          ? 0.35
+          : (0.35 + Math.abs(deltaPct) * 420 + this.shockIntensity * 3.85);
+        st.shockSigma = justHydrated ? 0.35 : (st.shockSigma * 0.78 + targetSigma * 0.22);
 
         const s = this.shockIntensity;
         st.radarAxes = [

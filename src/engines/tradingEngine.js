@@ -83,6 +83,7 @@
       this.maxDrawdownPct = 2.0;
       this.maxShockSigma = 2.2;
       this.autoFlattenOnBreak = true;
+      this.strictSlTpOnly = false;
 
       // Institutional Risk Shield (+EV & Capital Preservation)
       this.riskShield = {
@@ -578,6 +579,25 @@
       return this.dailyProfitLockEnabled;
     }
 
+    setStrictSlTpOnly(enabled) {
+      this.strictSlTpOnly = Boolean(enabled);
+      this._log('SHIELD', this.strictSlTpOnly
+        ? '🎯 Đã BẬT giữ lệnh chuẩn: chỉ chốt đúng TP/SL hoặc khi bạn tự bấm Đóng.'
+        : 'Đã TẮT giữ lệnh chuẩn: AI có thể tự cắt sớm / đảo chiều lệnh Bot.');
+      this._emit('updated');
+      return this.strictSlTpOnly;
+    }
+
+    _isPositionAwaitingLiveQuote(pos) {
+      return Boolean(
+        pos &&
+        this.market &&
+        this.market._liveWsStarted &&
+        typeof this.market.hasLiveQuote === 'function' &&
+        !this.market.hasLiveQuote(pos.symbol, pos.exchange)
+      );
+    }
+
     unlockDailyProfitLock(rebaseDailyTarget = true) {
       this.dailyProfitLocked = false;
       this.dailyProfitLockReason = '';
@@ -632,7 +652,7 @@
     exportState() {
       const cloneObj = (o) => JSON.parse(JSON.stringify(o));
       return {
-        version: 1,
+        version: 2,
         savedAt: this._now(),
         initialCapital: this.initialCapital,
         demoCapitalBackup: this.demoCapitalBackup,
@@ -645,6 +665,7 @@
         dailyProfitLocked: Boolean(this.dailyProfitLocked),
         dailyProfitLockReason: this.dailyProfitLockReason || '',
         dailyProfitLockEnabled: Boolean(this.dailyProfitLockEnabled),
+        strictSlTpOnly: Boolean(this.strictSlTpOnly),
         pnlLedger: cloneObj(this.pnlLedger),
         riskMode: this.riskMode || 'BALANCED',
         highRiskLeverage: this.highRiskLeverage || 10,
@@ -702,6 +723,7 @@
       this.breakerTripped = Boolean(snap.breakerTripped);
       this.breakerReason = typeof snap.breakerReason === 'string' ? snap.breakerReason : '';
       this.autoFlattenOnBreak = snap.autoFlattenOnBreak !== undefined ? Boolean(snap.autoFlattenOnBreak) : true;
+      this.strictSlTpOnly = snap.strictSlTpOnly !== undefined ? Boolean(snap.strictSlTpOnly) : false;
       if (snap.riskShield && typeof snap.riskShield === 'object') {
         this.riskShield = { ...this.riskShield, ...snap.riskShield };
       }
@@ -746,13 +768,28 @@
         }
       }
 
-      if (typeof this.market.ensureInstrument === 'function') {
-        this.positions.forEach((p) => this.market.ensureInstrument(p.symbol, p.exchange, p.entryPrice));
-        this.limitOrders.forEach((o) => this.market.ensureInstrument(o.symbol, o.exchange, o.entryPrice));
-      }
+      this.positions.forEach((p) => {
+        const refPx = (Number.isFinite(Number(p.markPrice)) && Number(p.markPrice) > 0)
+          ? Number(p.markPrice)
+          : Number(p.entryPrice);
+        if (typeof this.market.anchorSymbolPrice === 'function') {
+          this.market.anchorSymbolPrice(p.symbol, p.exchange, refPx);
+        } else if (typeof this.market.ensureInstrument === 'function') {
+          this.market.ensureInstrument(p.symbol, { price: refPx });
+        }
+      });
+      this.limitOrders.forEach((o) => {
+        const refPx = Number(o.entryPrice);
+        if (typeof this.market.anchorSymbolPrice === 'function') {
+          this.market.anchorSymbolPrice(o.symbol, o.exchange, refPx);
+        } else if (typeof this.market.ensureInstrument === 'function') {
+          this.market.ensureInstrument(o.symbol, { price: refPx });
+        }
+      });
 
       this._syncRiskToCapitalProfile(Math.max(10, this.balance));
       const eqNow = this.getMetrics().equity;
+      this.peakEquity = Math.max(this.peakEquity, eqNow);
       this.equityHistory = Array.from({ length: 48 }, () => eqNow);
       this._log('SYS', `🔄 Khôi phục phiên giao dịch gần nhất: Bot ${this.botRunning ? 'ĐANG BẬT' : 'TẠM DỪNG'} • ${this.positions.length} vị thế mở • Số dư $${this.balance.toFixed(2)}.`);
       this._emit('updated');
@@ -1296,7 +1333,9 @@
       let usedMargin = 0;
 
       for (const pos of this.positions) {
-        const mark = this.market.getPrice(pos.symbol, pos.exchange);
+        const mark = this._isPositionAwaitingLiveQuote(pos)
+          ? ((Number.isFinite(Number(pos.markPrice)) && Number(pos.markPrice) > 0) ? Number(pos.markPrice) : pos.entryPrice)
+          : this.market.getPrice(pos.symbol, pos.exchange);
         const dir = pos.side === 'LONG' ? 1 : -1;
         const pricePnl = ((mark - pos.entryPrice) / pos.entryPrice) * pos.sizeUsd * dir;
         const pnl = pricePnl + (pos.accruedFundingUsd || 0) - (pos.entryFeeUsd || 0);
@@ -1879,7 +1918,7 @@
       this.limitOrders = [];
 
       let closedCount = 0;
-      if (this.autoFlattenOnBreak && this.positions.length > 0) {
+      if (this.autoFlattenOnBreak && !this.strictSlTpOnly && this.positions.length > 0) {
         closedCount = this.positions.length;
         const ids = this.positions.map((p) => p.id);
         ids.forEach((id) => this.closePosition(id, 'CIRCUIT BREAKER'));
@@ -1918,6 +1957,9 @@
       const nowMs = Date.now();
       for (let i = this.limitOrders.length - 1; i >= 0; i--) {
         const ord = this.limitOrders[i];
+        if (this.market._liveWsStarted && typeof this.market.hasLiveQuote === 'function' && !this.market.hasLiveQuote(ord.symbol)) {
+          continue;
+        }
         ord.ticksWaiting = (ord.ticksWaiting || 0) + 1;
         if (ord.source === 'BOT' && !ord.hedgeGroupId && (ord.ticksWaiting > 20 || (nowMs - (ord.createdAt || nowMs)) > 5000)) {
           this.limitOrders.splice(i, 1);
@@ -1952,6 +1994,9 @@
       const hedgeGroups = {};
 
       for (const pos of this.positions) {
+        if (!pos.hedgeGroupId && this._isPositionAwaitingLiveQuote(pos)) {
+          continue;
+        }
         const px = this.market.getPrice(pos.symbol, pos.exchange);
         const dir = pos.side === 'LONG' ? 1 : -1;
 
@@ -2031,12 +2076,12 @@
             toClose.push({ id: pos.id, reason, exitPrice: this._computeStopFillPrice(pos, px, reason) });
           } else if (pos.tpPrice && px >= pos.tpPrice) {
             toClose.push({ id: pos.id, reason: 'TAKE PROFIT HIT', exitPrice: pos.tpPrice });
-          } else if (pos.source === 'BOT' && rMultiple >= 0.35) {
+          } else if (!this.strictSlTpOnly && pos.source === 'BOT' && rMultiple >= 0.35) {
             const sig = this.market.getDirectionalSignal(pos.symbol);
             if (dir * sig.score <= -26) {
               toClose.push({ id: pos.id, reason: 'AI FLOW REVERSAL TP', exitPrice: px });
             }
-          } else if (pos.source === 'BOT' && !pos.beLocked && rMultiple <= -0.55 && (this.tickCounter - (pos.openedAtTick || 0)) >= 6) {
+          } else if (!this.strictSlTpOnly && pos.source === 'BOT' && !pos.beLocked && rMultiple <= -0.55 && (this.tickCounter - (pos.openedAtTick || 0)) >= 6) {
             const sig = this.market.getDirectionalSignal(pos.symbol);
             if (dir * sig.score <= -38) {
               toClose.push({ id: pos.id, reason: 'EARLY AI CUT LOSS', exitPrice: Math.max(px, pos.slPrice) });
@@ -2048,12 +2093,12 @@
             toClose.push({ id: pos.id, reason, exitPrice: this._computeStopFillPrice(pos, px, reason) });
           } else if (pos.tpPrice && px <= pos.tpPrice) {
             toClose.push({ id: pos.id, reason: 'TAKE PROFIT HIT', exitPrice: pos.tpPrice });
-          } else if (pos.source === 'BOT' && rMultiple >= 0.35) {
+          } else if (!this.strictSlTpOnly && pos.source === 'BOT' && rMultiple >= 0.35) {
             const sig = this.market.getDirectionalSignal(pos.symbol);
             if (dir * sig.score <= -26) {
               toClose.push({ id: pos.id, reason: 'AI FLOW REVERSAL TP', exitPrice: px });
             }
-          } else if (pos.source === 'BOT' && !pos.beLocked && rMultiple <= -0.55 && (this.tickCounter - (pos.openedAtTick || 0)) >= 6) {
+          } else if (!this.strictSlTpOnly && pos.source === 'BOT' && !pos.beLocked && rMultiple <= -0.55 && (this.tickCounter - (pos.openedAtTick || 0)) >= 6) {
             const sig = this.market.getDirectionalSignal(pos.symbol);
             if (dir * sig.score <= -38) {
               toClose.push({ id: pos.id, reason: 'EARLY AI CUT LOSS', exitPrice: Math.min(px, pos.slPrice) });
@@ -2089,7 +2134,10 @@
       if (this.equityHistory.length > 64) this.equityHistory.shift();
 
       const activeSt = this.market.getSymbolState();
-      if (!this.breakerTripped && activeSt.shockSigma >= this.maxShockSigma) {
+      const canCheckLiveShock = !this.market._liveWsStarted ||
+        this.market.shockIntensity > 0.15 ||
+        (typeof this.market.hasLiveQuote === 'function' && this.market.hasLiveQuote(activeSt.symbol));
+      if (!this.breakerTripped && canCheckLiveShock && activeSt.shockSigma >= this.maxShockSigma) {
         this.tripCircuitBreaker(`Sốc biến động đạt ${activeSt.shockSigma.toFixed(2)}σ (vượt ngưỡng ${this.maxShockSigma}σ)`);
       }
 
@@ -2126,16 +2174,18 @@
 
       if (!hitTarget && !hitGivebackFloor) return false;
 
-      // Cancel pending BOT directional limit orders and lock in open BOT directional positions
-      for (let i = this.limitOrders.length - 1; i >= 0; i--) {
-        if (this.limitOrders[i].source === 'BOT' && !this.limitOrders[i].hedgeGroupId) {
-          this.limitOrders.splice(i, 1);
+      if (!this.strictSlTpOnly) {
+        // Cancel pending BOT directional limit orders and lock in open BOT directional positions
+        for (let i = this.limitOrders.length - 1; i >= 0; i--) {
+          if (this.limitOrders[i].source === 'BOT' && !this.limitOrders[i].hedgeGroupId) {
+            this.limitOrders.splice(i, 1);
+          }
         }
+        const botPosIds = this.positions
+          .filter((p) => p.source === 'BOT' && !p.hedgeGroupId)
+          .map((p) => p.id);
+        botPosIds.forEach((id) => this.closePosition(id, 'DAILY PROFIT LOCK'));
       }
-      const botPosIds = this.positions
-        .filter((p) => p.source === 'BOT' && !p.hedgeGroupId)
-        .map((p) => p.id);
-      botPosIds.forEach((id) => this.closePosition(id, 'DAILY PROFIT LOCK'));
 
       const postLockMetrics = this.getMetrics();
       const finalDailyPnl = postLockMetrics.dailyPnlUsd;

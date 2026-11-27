@@ -87,12 +87,20 @@
 
   const STORAGE_STATE_KEY = 'qc_terminal_state_v1';
   let lastSavedStateAt = 0;
+  let lastPersistedOrderSig = '';
+
+  function getPersistedOrderSignature() {
+    const posIds = Array.isArray(trading.positions) ? trading.positions.map((p) => p.id).join(',') : '';
+    const ordIds = Array.isArray(trading.limitOrders) ? trading.limitOrders.map((o) => o.id).join(',') : '';
+    return `${trading.positions.length}|${trading.limitOrders.length}|${trading.history.length}|${posIds}|${ordIds}`;
+  }
 
   function savePersistedState(force = false) {
     if (typeof localStorage === 'undefined' || trading.mode === 'LIVE') return;
     const now = Date.now();
     if (!force && (now - lastSavedStateAt) < 1200) return;
     lastSavedStateAt = now;
+    lastPersistedOrderSig = getPersistedOrderSignature();
     try {
       const snap = trading.exportState();
       localStorage.setItem(STORAGE_STATE_KEY, JSON.stringify(snap));
@@ -135,6 +143,7 @@
       if (optExists) levEl.value = String(restoredPlan.maxSafeLeverage);
     }
     const setChk = (id, val) => { const el = $(id); if (el) el.checked = Boolean(val); };
+    setChk('chkStrictSlTp', trading.strictSlTpOnly);
     setChk('chkDailyProfitLock', trading.dailyProfitLockEnabled);
     setChk('chkMtfFilter', market.mtfFilterEnabled);
     setChk('chkNewsSpikeFilter', market.newsSpikeFilterEnabled);
@@ -2646,6 +2655,7 @@
     $('chkAutoBE').addEventListener('change', (e) => {
       trading.riskShield.autoBreakeven = e.target.checked;
       trading.riskShield.autoTrailing = e.target.checked;
+      savePersistedState(true);
     });
     $('inpSlPct').addEventListener('input', () => {
       syncAutoSize();
@@ -2971,10 +2981,26 @@
       });
     }
 
+    const chkStrictSlTp = $('chkStrictSlTp');
+    if (chkStrictSlTp) {
+      chkStrictSlTp.addEventListener('change', (e) => {
+        trading.setStrictSlTpOnly(e.target.checked);
+        savePersistedState(true);
+        showToast({
+          type: e.target.checked ? 'pos' : 'gold',
+          title: e.target.checked ? '🎯 GIỮ LỆNH CHUẨN TP/SL' : 'TẮT GIỮ LỆNH CHUẨN TP/SL',
+          msg: e.target.checked
+            ? 'Chỉ chốt khi chạm đúng TP / SL hoặc khi bạn tự bấm Đóng.'
+            : 'AI được phép tự chốt đảo chiều hoặc cắt lỗ sớm.'
+        });
+      });
+    }
+
     const chkDailyProfitLock = $('chkDailyProfitLock');
     if (chkDailyProfitLock) {
       chkDailyProfitLock.addEventListener('change', (e) => {
         trading.setDailyProfitLockEnabled(e.target.checked);
+        savePersistedState(true);
       });
     }
 
@@ -2982,6 +3008,7 @@
     if (chkMtfFilter) {
       chkMtfFilter.addEventListener('change', (e) => {
         market.mtfFilterEnabled = e.target.checked;
+        savePersistedState(true);
         showToast({
           type: e.target.checked ? 'cyan' : 'gold',
           title: e.target.checked ? 'BẬT LỌC KHUNG 5M' : 'TẮT LỌC KHUNG 5M',
@@ -2994,6 +3021,7 @@
     if (chkNewsSpikeFilter) {
       chkNewsSpikeFilter.addEventListener('change', (e) => {
         market.newsSpikeFilterEnabled = e.target.checked;
+        savePersistedState(true);
         showToast({
           type: e.target.checked ? 'cyan' : 'gold',
           title: e.target.checked ? 'BẬT LỌC TIN / NẾN GIẬT' : 'TẮT LỌC TIN / NẾN GIẬT',
@@ -3044,6 +3072,7 @@
 
     $('chkAutoFlatten').addEventListener('change', (e) => {
       trading.autoFlattenOnBreak = e.target.checked;
+      savePersistedState(true);
     });
 
     const leftDeckTabs = $('leftDeckTabs');
@@ -3693,7 +3722,10 @@
         savePersistedState(true);
       } else if (type === 'updated' || type === 'breakerTripped' || type === 'breakerReset') {
         renderTradingPanels();
-        savePersistedState(type !== 'updated');
+        const curOrderSig = getPersistedOrderSignature();
+        const orderChanged = curOrderSig !== lastPersistedOrderSig;
+        if (orderChanged) lastPersistedOrderSig = curOrderSig;
+        savePersistedState(type !== 'updated' || orderChanged);
       }
     });
 
@@ -3795,10 +3827,11 @@
 
   // Bootstrap: Restore active Demo session/Bot state if saved, else default to $100 Demo
   let restoredSession = false;
+  let parsedState = null;
   try {
     const rawState = localStorage.getItem(STORAGE_STATE_KEY);
     if (rawState) {
-      const parsedState = JSON.parse(rawState);
+      parsedState = JSON.parse(rawState);
       restoredSession = trading.importState(parsedState);
     }
   } catch (_) {}
@@ -3806,14 +3839,28 @@
   if (!restoredSession) {
     market.timeframe = '1m';
     trading.setCapital(100);
+    trading.strictSlTpOnly = true;
+    trading.autoFlattenOnBreak = false;
+    trading.riskShield.autoBreakeven = false;
+    trading.riskShield.autoTrailing = false;
+  } else if (!parsedState?.version || parsedState.version < 2) {
+    // One-time v1 -> v2 migration: enforce strict TP/SL hold so Demo orders never auto-close unexpectedly
+    trading.strictSlTpOnly = true;
+    trading.autoFlattenOnBreak = false;
+    trading.riskShield.autoBreakeven = false;
+    trading.riskShield.autoTrailing = false;
+    if (trading.breakerTripped && market.shockIntensity <= 0.15) {
+      trading.resetCircuitBreaker(true);
+    }
   }
   buildVenueCards();
   renderInstrumentButtons();
   bindAllEvents();
+  syncUIFromRestoredState();
   if (restoredSession) {
-    syncUIFromRestoredState();
     renderInstrumentButtons();
   }
+  savePersistedState(true);
   syncAutoSize();
   updateClock();
   updateMarketHUD(market.getSymbolState());

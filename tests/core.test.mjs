@@ -1890,3 +1890,98 @@ test('Timeframes 15m/30m/1h map exchange intervals cleanly and compute UP/DOWN d
   assert.ok(f1h.targetPrice < f1h.lastPrice);
   assert.equal(st.signalCandles.length, origSigLen);
 });
+
+test('Reload under live WebSocket mode preserves Demo positions across seed-price gap and strictSlTpOnly holds until exact TP/SL or manual close', async () => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+  let m2 = null;
+  try {
+    const m1 = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+    const t1 = new QuantumTradingEngine(m1, { QuantumUUID, QuantumSchemas });
+    t1.setCapital(500);
+    t1.setStrictSlTpOnly(true);
+    t1.autoFlattenOnBreak = false;
+    t1.riskShield.autoBreakeven = false;
+    t1.riskShield.autoTrailing = false;
+
+    m1.wsEnabled = true;
+    // Open BTC-PERP far above hardcoded seed 58,585 + dynamic 1000PEPE-PERP
+    m1.applyLiveVenueQuote('BTC-PERP', 'BINANCE', 92000, 0.01, 1.5);
+    m1.ensureInstrument('1000PEPE-PERP', { price: 0.0085 });
+    m1.applyLiveVenueQuote('1000PEPE-PERP', 'BINANCE', 0.0085, 0.01, 2.0);
+
+    const btcPos = t1.placeMarketOrder({
+      symbol: 'BTC-PERP',
+      exchange: 'BINANCE',
+      side: 'LONG',
+      sizeUsd: 200,
+      leverage: 5,
+      slPct: 1.0,
+      tpPct: 2.0,
+      source: 'BOT'
+    });
+    const pepePos = t1.placeMarketOrder({
+      symbol: '1000PEPE-PERP',
+      exchange: 'BINANCE',
+      side: 'LONG',
+      sizeUsd: 100,
+      leverage: 5,
+      slPct: 1.0,
+      tpPct: 2.0,
+      source: 'MANUAL'
+    });
+    assert.ok(btcPos && pepePos);
+
+    const snap = t1.exportState();
+    assert.equal(snap.version, 2);
+    assert.equal(snap.strictSlTpOnly, true);
+    assert.equal(snap.positions.length, 2);
+
+    // Reopen app: MarketEngine has WS enabled & started, BEFORE first live quotes arrive!
+    m2 = new QuantumMarketEngine({ QuantumUUID, QuantumSchemas });
+    m2._openBinanceWsForSymbol = () => null;
+    m2.wsEnabled = true;
+    m2._liveWsStarted = true;
+    const t2 = new QuantumTradingEngine(m2, { QuantumUUID, QuantumSchemas });
+    assert.equal(t2.importState(snap), true);
+    assert.equal(t2.positions.length, 2);
+
+    // Run 15 ticks BEFORE live quotes arrive -> stale seed price must NOT close positions or trip breaker!
+    for (let i = 0; i < 15; i++) {
+      m2.tick();
+      t2.onMarketTick();
+    }
+    assert.equal(t2.positions.length, 2, 'Positions must survive reload before live quotes arrive');
+    assert.equal(t2.breakerTripped, false, 'Circuit breaker must not false-trip before live quotes');
+
+    // First live quotes arrive with huge jump from seed (58585 -> 92100, 10 -> 0.00855)
+    m2.applyLiveVenueQuote('BTC-PERP', 'BINANCE', 92100, 0.01, 1.6);
+    m2.applyLiveVenueQuote('1000PEPE-PERP', 'BINANCE', 0.00855, 0.01, 2.1);
+    for (let i = 0; i < 5; i++) {
+      m2.tick();
+      t2.onMarketTick();
+    }
+    assert.equal(t2.positions.length, 2, 'First live quote hydration must not trigger shock flatten or fake SL');
+    assert.equal(t2.breakerTripped, false, 'Hydration jump from seed price must not spike shockSigma');
+
+    // Even if Circuit Breaker fires manually under strictSlTpOnly, open positions stay alive
+    t2.tripCircuitBreaker('TEST BREAKER');
+    assert.equal(t2.positions.length, 2, 'strictSlTpOnly must prevent breaker from flattening open positions');
+    t2.resetCircuitBreaker(true);
+
+    // Exact TP closes BTC-PERP, exact SL closes 1000PEPE-PERP
+    const restoredBtc = t2.positions.find((p) => p.symbol === 'BTC-PERP');
+    const restoredPepe = t2.positions.find((p) => p.symbol === '1000PEPE-PERP');
+    m2.applyLiveVenueQuote('BTC-PERP', 'BINANCE', restoredBtc.tpPrice + 5, 0.01, 3.0);
+    m2.applyLiveVenueQuote('1000PEPE-PERP', 'BINANCE', restoredPepe.slPrice * 0.995, 0.01, -1.5);
+    m2.tick();
+    t2.onMarketTick();
+
+    assert.equal(t2.positions.length, 0);
+    assert.equal(t2.history.find((h) => h.symbol === 'BTC-PERP')?.reason, 'TAKE PROFIT HIT');
+    assert.equal(t2.history.find((h) => h.symbol === '1000PEPE-PERP')?.reason, 'STOP LOSS HIT');
+  } finally {
+    if (m2) m2.toggleLiveWebSocket(false);
+    globalThis.fetch = origFetch;
+  }
+});
